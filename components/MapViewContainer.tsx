@@ -1,0 +1,382 @@
+/**
+ * Componente principal del mapa
+ * Gestiona ubicación, cálculo de rutas, validación de zonas bloqueadas
+ * y renderizado del mapa con marcadores y polilíneas
+ */
+
+import { getRoute } from '@/src/services/openRouteService';
+import polyline from '@mapbox/polyline';
+import { DrawerActions, useNavigation } from '@react-navigation/native';
+import * as Location from 'expo-location';
+import React, { useEffect, useState } from 'react';
+import { ActivityIndicator, Alert, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import MapView, { Geojson, Marker, Polyline } from 'react-native-maps';
+import { useRouteContext } from '../context/RouteContext';
+import derrumbeData from '../data/amenaza_derrumbe.json';
+import inundacionData from '../data/amenaza_inundacion.json';
+import destinos from '../data/destinos.json';
+import { routeIntersectsBlocked } from '../src/utils/geometry';
+import { getDestinoMasCercano } from '../src/utils/getDestinoMasCercano';
+
+
+type LatLngTuple = [number, number];
+
+export default function MapViewContainer() {
+
+  const [location, setLocation] = useState<Location.LocationObjectCoords | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [routeCoords, setRouteCoords] = useState<{ latitude: number; longitude: number }[]>([]);
+  const [isRecalculating, setIsRecalculating] = useState(false);
+
+  const {
+    selectedDestination,
+    blockedRoutes,
+    routeProfile,
+    shouldCalculateRoute,
+    setShouldCalculateRoute,
+    startMode,
+    startPoint,
+    setStartPoint,
+    destinationMode,
+  } = useRouteContext();
+  const derrumbeMedia = {
+  ...derrumbeData,
+  features: derrumbeData.features.filter(
+    f => f.properties?.Categoria === "Media"
+  )
+};
+
+const derrumbeAlta = {
+  ...derrumbeData,
+  features: derrumbeData.features.filter(
+    f => f.properties?.Categoria === "Alta"
+  )
+};
+const amenazaMedia = {
+  ...inundacionData,
+  features: inundacionData.features.filter(
+    f => f.properties?.Categoria === "Media"
+  )
+};
+
+const amenazaAlta = {
+  ...inundacionData,
+  features: inundacionData.features.filter(
+    f => f.properties?.Categoria === "Alta"
+  )
+};
+const [mostrarDerrumbe, setMostrarDerrumbe] = useState(false);
+const { emergencyType } = useRouteContext();
+  const navigation = useNavigation();
+
+  /**
+   * Seguimiento en tiempo real
+   */
+  useEffect(() => {
+    let subscription: Location.LocationSubscription;
+
+    (async () => {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permiso denegado', 'Se necesita acceso a tu ubicación.');
+        setLoading(false);
+        return;
+      }
+
+      subscription = await Location.watchPositionAsync(
+        {
+          accuracy: Location.Accuracy.High,
+          distanceInterval: 3,
+        },
+        (loc) => {
+          setLocation(loc.coords);
+          setLoading(false);
+        }
+      );
+    })();
+
+    return () => {
+      if (subscription) subscription.remove();
+    };
+  }, []);
+
+  /**
+   * Consumo de ruta + detección de desviación
+   */
+  useEffect(() => {
+    if (!location || routeCoords.length === 0) return;
+
+    // Desviación detectada
+    if (isOffRoute(location, routeCoords) && !isRecalculating) {
+      console.log("Fuera de ruta, recalculando...");
+      setIsRecalculating(true);
+      setShouldCalculateRoute(true);
+      return;
+    }
+
+    // Consumir puntos recorridos
+    const remainingRoute = routeCoords.filter((coord) => {
+      const distance = getDistance(
+        location.latitude,
+        location.longitude,
+        coord.latitude,
+        coord.longitude
+      );
+      return distance > 10;
+    });
+
+    setRouteCoords(remainingRoute);
+
+  }, [location]);
+
+  /**
+   * Limpia punto manual al cambiar a GPS
+   */
+  useEffect(() => {
+    if (startMode === 'gps') setStartPoint(null);
+  }, [startMode]);
+
+  /**
+   * Cálculo de ruta
+   */
+  useEffect(() => {
+    if (!shouldCalculateRoute) return;
+    if (!location) return;
+
+    let finalDestination = selectedDestination;
+
+    if (destinationMode === 'closest') {
+      const userLocation =
+        startMode === 'manual' && startPoint
+          ? { latitude: startPoint.lat, longitude: startPoint.lng }
+          : { latitude: location.latitude, longitude: location.longitude };
+
+      finalDestination = getDestinoMasCercano(
+        userLocation,
+        destinos.filter(d => d.tipo === 'punto_encuentro')
+      );
+
+      if (!finalDestination) {
+        setShouldCalculateRoute(false);
+        setIsRecalculating(false);
+        return;
+      }
+    }
+
+    if (!finalDestination) {
+      setShouldCalculateRoute(false);
+      setIsRecalculating(false);
+      return;
+    }
+
+    const start: [number, number] =
+      startMode === 'manual' && startPoint
+        ? [startPoint.lng, startPoint.lat]
+        : [location.longitude, location.latitude];
+
+    const end: [number, number] = [
+      finalDestination.lng,
+      finalDestination.lat,
+    ];
+
+    const relevantBlockedRoutes = {
+      ...blockedRoutes,
+      features: blockedRoutes.features.filter(
+        (f) => !f.properties?.profile || f.properties.profile === routeProfile
+      ),
+    };
+
+    getRoute(start, end, routeProfile, relevantBlockedRoutes)
+      .then((route) => {
+        const encodedPolyline = route.routes[0]?.geometry;
+        if (!encodedPolyline) throw new Error('No geometry');
+
+        const coords = (polyline.decode(encodedPolyline) as LatLngTuple[])
+          .map(([lat, lng]) => ({
+            latitude: lat,
+            longitude: lng,
+          }));
+
+        if (routeIntersectsBlocked(coords, relevantBlockedRoutes)) {
+          setRouteCoords([]);
+        } else {
+          setRouteCoords(coords);
+        }
+      })
+      .catch((err) => {
+        console.error(err);
+
+        // Solo mostrar error si fue cálculo manual
+        if (!isRecalculating) {
+          Alert.alert('Error', 'No se pudo calcular la ruta.');
+        }
+      })
+      .finally(() => {
+        setShouldCalculateRoute(false);
+        setIsRecalculating(false);
+      });
+
+  }, [shouldCalculateRoute]);
+
+  if (loading || !location)
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#2196f3" />
+      </View>
+    );
+
+  return (
+    <View style={styles.container}>
+
+      <TouchableOpacity
+        onPress={() => navigation.dispatch(DrawerActions.openDrawer())}
+        style={{
+          position: 'absolute',
+          top: 40,
+          left: 20,
+          backgroundColor: '#ffffffcc',
+          padding: 8,
+          borderRadius: 8,
+          zIndex: 10,
+        }}
+      >
+        <Text style={{ fontSize: 24 }}>☰</Text>
+      </TouchableOpacity>
+
+
+<MapView
+  style={styles.map}
+  initialRegion={{
+    latitude: location.latitude,
+    longitude: location.longitude,
+    latitudeDelta: 0.01,
+    longitudeDelta: 0.01,
+  }}
+  showsUserLocation
+  showsMyLocationButton
+  onPress={(e) => {
+    if (startMode !== 'manual') return;
+    const { latitude, longitude } = e.nativeEvent.coordinate;
+    setStartPoint({ lat: latitude, lng: longitude });
+  }}
+>
+
+  {/* 🔵 Ruta activa */}
+  {routeCoords.length > 0 && (
+    <Polyline
+      coordinates={routeCoords}
+      strokeColor="#2196f3"
+      strokeWidth={4}
+    />
+  )}
+
+  {/*  Inundación */}
+  {emergencyType === "inundacion" && (
+    <>
+      <Geojson
+        geojson={amenazaMedia}
+        strokeColor="rgba(255,165,0,0.3)"
+        fillColor="rgba(255,165,0,0.08)"
+        strokeWidth={1}
+      />
+
+      <Geojson
+        geojson={amenazaAlta}
+        strokeColor="rgba(255,0,0,0.3)"
+        fillColor="rgba(255,0,0,0.08)"
+        strokeWidth={1}
+      />
+    </>
+  )}
+  
+{/* 🪨 DERRUMBE */}
+{emergencyType === "derrumbe" && (
+  <>
+    <Geojson
+      geojson={derrumbeMedia}
+      strokeColor="rgba(255,140,0,0.4)"
+      fillColor="rgba(255,140,0,0.1)"
+      strokeWidth={1}
+    />
+    <Geojson
+      geojson={derrumbeAlta}
+      strokeColor="rgba(139,0,0,0.5)"
+      fillColor="rgba(139,0,0,0.15)"
+      strokeWidth={1}
+    />
+  </>
+)}
+
+
+  {/* 📍 Punto inicial manual */}
+  {startMode === 'manual' && startPoint && (
+    <Marker
+      coordinate={{
+        latitude: startPoint.lat,
+        longitude: startPoint.lng,
+      }}
+      title="Punto inicial"
+      pinColor="orange"
+    />
+  )}
+
+</MapView>
+
+
+    </View>
+  );
+}
+
+/**
+ * método fundamental en navegación y geolocalización para calcular la distancia más corta
+ */
+const getDistance = (
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number
+) => {
+  const R = 6371e3;
+  const φ1 = lat1 * Math.PI / 180;
+  const φ2 = lat2 * Math.PI / 180;
+  const Δφ = (lat2 - lat1) * Math.PI / 180;
+  const Δλ = (lon2 - lon1) * Math.PI / 180;
+
+  const a =
+    Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+    Math.cos(φ1) * Math.cos(φ2) *
+    Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+  return R * c;
+};
+
+/**
+ * Detecta desviación (25 metros)
+ */
+const isOffRoute = (
+  location: Location.LocationObjectCoords,
+  routeCoords: { latitude: number; longitude: number }[]
+) => {
+  let minDistance = Infinity;
+
+  for (let coord of routeCoords) {
+    const distance = getDistance(
+      location.latitude,
+      location.longitude,
+      coord.latitude,
+      coord.longitude
+    );
+
+    if (distance < minDistance) minDistance = distance;
+  }
+
+  return minDistance > 25;
+};
+
+const styles = StyleSheet.create({
+  container: { flex: 1 },
+  map: { flex: 1 },
+  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+});

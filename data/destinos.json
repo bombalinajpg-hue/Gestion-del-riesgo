@@ -1,0 +1,26 @@
+[
+  {
+    "id": 1,
+    "nombre": "Punto Encuentro Bomberos ",
+    "tipo": "punto_encuentro",
+    "lat": 4.864046134373432,
+    "lng": -75.62118172646424
+  },
+  {
+    "id": 2,
+    "nombre": "Punto Encuentro Estacion de Policia",
+    "tipo": "punto_encuentro",
+    "lat": 4.86725902956242,
+    "lng": -75.61953290701386
+  },
+
+  {
+    "id": 3,
+    "nombre": "Punto Encuentro Iglesia",
+    "tipo": "punto_encuentro",
+    "lat": 4.872868162699233,
+    "lng": -75.6305512153776
+  }
+]
+
+
