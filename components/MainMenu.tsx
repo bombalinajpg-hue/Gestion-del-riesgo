@@ -25,9 +25,6 @@ export default function MainMenu({ navigation }: DrawerContentComponentProps) {
     emergencyType !== 'ninguna' &&
     (destinationMode === 'closest' || selectedDestination !== null);
 
-  const faltaEmergencia = emergencyType === 'ninguna';
-  const faltaDestino = destinationMode !== 'closest' && selectedDestination === null;
-
   return (
     <ScrollView style={styles.wrapper} contentContainerStyle={{ paddingBottom: 32 }}>
       <View style={styles.card}>
@@ -57,6 +54,11 @@ export default function MainMenu({ navigation }: DrawerContentComponentProps) {
             </TouchableOpacity>
           ))}
         </View>
+
+        {/* Mensaje inline: falta emergencia */}
+        {emergencyType === 'ninguna' && (
+          <Text style={styles.inlineHint}>Selecciona el tipo de emergencia para continuar</Text>
+        )}
 
         {/* Leyenda */}
         {emergencyType !== 'ninguna' && (
@@ -164,6 +166,11 @@ export default function MainMenu({ navigation }: DrawerContentComponentProps) {
           })}
         </View>
 
+        {/* Mensaje inline: falta destino */}
+        {emergencyType !== 'ninguna' && destinationMode !== 'closest' && selectedDestination === null && (
+          <Text style={styles.inlineHint}>Selecciona un punto de encuentro para continuar</Text>
+        )}
+
         {/* Inicio de la ruta */}
         <Text style={[styles.label, !parametrosBasicosListos && styles.labelDisabled]}>
           Inicio de la ruta
@@ -181,9 +188,7 @@ export default function MainMenu({ navigation }: DrawerContentComponentProps) {
                 onPress={() => {
                   setStartMode(option.value as any);
                   setStartPoint(null);
-                  if (option.value === 'gps') {
-                    setShouldCenterOnUser(true);
-                  }
+                  if (option.value === 'gps') setShouldCenterOnUser(true);
                   navigation.closeDrawer();
                 }}
               >
@@ -194,13 +199,11 @@ export default function MainMenu({ navigation }: DrawerContentComponentProps) {
             ))}
           </View>
         ) : (
-          <View style={styles.parametrosFaltantesBox}>
-            {faltaEmergencia && (
-              <Text style={styles.parametroFaltanteText}>• Selecciona el tipo de emergencia</Text>
-            )}
-            {faltaDestino && (
-              <Text style={styles.parametroFaltanteText}>• Selecciona un punto de encuentro</Text>
-            )}
+          <View style={styles.inicioDeshabilitado}>
+            <MaterialIcons name="lock" size={16} color="#b0bec5" style={{ marginRight: 6 }} />
+            <Text style={styles.inicioDeshabilitadoText}>
+              Completa los pasos anteriores para seleccionar el inicio
+            </Text>
           </View>
         )}
 
@@ -221,6 +224,13 @@ const styles = StyleSheet.create({
   optionButtonActive: { backgroundColor: '#118ab2', borderColor: '#118ab2' },
   optionText: { color: '#073b4c', fontWeight: '500', fontSize: 13 },
   optionTextActive: { color: '#ffffff' },
+  inlineHint: {
+    fontSize: 12, color: '#856404',
+    backgroundColor: '#fff3cd', borderRadius: 8,
+    paddingHorizontal: 10, paddingVertical: 6,
+    marginTop: 4, marginBottom: 4,
+    borderLeftWidth: 3, borderLeftColor: '#ffc107',
+  },
   leyendaBox: { marginTop: 8, padding: 10, backgroundColor: '#f7f7f7', borderRadius: 10, borderLeftWidth: 4, borderLeftColor: '#118ab2' },
   leyendaTitle: { fontWeight: '700', color: '#073b4c', fontSize: 12, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 },
   leyendaRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 4 },
@@ -230,6 +240,12 @@ const styles = StyleSheet.create({
   destinoCardActive: { backgroundColor: '#118ab2', borderLeftColor: '#073b4c' },
   destinoText: { color: '#073b4c', fontWeight: '500' },
   destinoTextActive: { color: '#ffffff' },
-  parametrosFaltantesBox: { marginTop: 8, padding: 12, backgroundColor: '#fff3cd', borderRadius: 10, borderLeftWidth: 4, borderLeftColor: '#ffc107' },
-  parametroFaltanteText: { color: '#856404', fontSize: 12, marginBottom: 4 },
+  inicioDeshabilitado: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingVertical: 10, paddingHorizontal: 12,
+    backgroundColor: '#f4f4f4', borderRadius: 12,
+    borderWidth: 1, borderColor: '#e0e0e0',
+    marginBottom: 8,
+  },
+  inicioDeshabilitadoText: { color: '#b0bec5', fontSize: 12, flex: 1 },
 });
