@@ -1,7 +1,7 @@
 // context/RouteContext.tsx
 /**
- * Context para manejo global del estado de rutas y navegaciÃ³n
- * Gestiona configuraciÃ³n de rutas, puntos de inicio/destino, tipo de emergencia
+ * Context para manejo global del estado de rutas y navegación
+ * Gestiona configuración de rutas, puntos de inicio/destino, tipo de emergencia
  * y zonas bloqueadas cargadas desde archivo JSON
  */
 
@@ -10,7 +10,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import rawblockedRoutesJson from '../data/blockedRoutes.json';
 import { EmergencyType, RouteProfile, StartMode, StartPoint } from '../src/types/types';
 
-/** Modo de selecciÃ³n de destino: especÃ­fico o mÃ¡s cercano */
+/** Modo de selección de destino: específico o más cercano */
 type DestinationMode = 'selected' | 'closest';
 
 /** Carga inicial de rutas bloqueadas desde JSON */
@@ -25,7 +25,7 @@ interface Destination {
     lng: number;
 }
 
-/** Tipo del contexto con todos los estados y setters de la aplicaciÃ³n */
+/** Tipo del contexto con todos los estados y setters de la aplicación */
 interface RouteContextType {
     routeProfile: RouteProfile;
     setRouteProfile: React.Dispatch<React.SetStateAction<RouteProfile>>;
@@ -43,13 +43,14 @@ interface RouteContextType {
     setBlockedRoutes: React.Dispatch<React.SetStateAction<FeatureCollection>>;
     destinationMode: DestinationMode;
     setDestinationMode: React.Dispatch<React.SetStateAction<DestinationMode>>;
+    shouldCenterOnUser: boolean;
+    setShouldCenterOnUser: React.Dispatch<React.SetStateAction<boolean>>;
 }
 
 const RouteContext = createContext<RouteContextType | undefined>(undefined);
 
 /**
  * Provider del contexto de rutas
- * Inicializa estados y maneja filtrado de zonas bloqueadas segÃºn tipo de emergencia
  */
 export const RouteProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const [routeProfile, setRouteProfile] = useState<RouteProfile>('foot-walking');
@@ -59,44 +60,25 @@ export const RouteProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const [startMode, setStartMode] = useState<StartMode>('gps');
     const [startPoint, setStartPoint] = useState<StartPoint | null>(null);
     const [destinationMode, setDestinationMode] = useState<DestinationMode>('selected');
+    const [shouldCenterOnUser, setShouldCenterOnUser] = useState(false);
     const [blockedRoutes, setBlockedRoutes] = useState<FeatureCollection>({
         type: 'FeatureCollection',
         features: []
     });
 
-    /**
-     * Carga inicial de todas las rutas bloqueadas desde el JSON
-     * Se ejecuta una sola vez al montar el componente
-     */
     useEffect(() => {
         setBlockedRoutes(rawblockedRoutes as FeatureCollection);
-        console.log('Zonas bloqueadas cargadas en el contexto:', rawblockedRoutes);
     }, []);
 
-    /**
-     * Filtra rutas bloqueadas segÃºn el tipo de emergencia seleccionado
-     * Si no hay emergencia, limpia las zonas bloqueadas
-     * Si hay emergencia, filtra features que coincidan con el tipo
-     */
     useEffect(() => {
         if (emergencyType === 'ninguna') {
-            setBlockedRoutes({
-                type: 'FeatureCollection',
-                features: []
-            });
+            setBlockedRoutes({ type: 'FeatureCollection', features: [] });
             return;
         }
-
         const filteredFeatures = rawblockedRoutes.features.filter(
             (feature: Feature<Geometry>) => feature.properties?.reason === emergencyType
         );
-        const filteredCollection: FeatureCollection = {
-            type: 'FeatureCollection',
-            features: filteredFeatures
-        };
-
-        setBlockedRoutes(filteredCollection);
-        console.log(`ðŸš¨ Rutas bloqueadas por ${emergencyType} cargadas`, filteredCollection);
+        setBlockedRoutes({ type: 'FeatureCollection', features: filteredFeatures });
     }, [emergencyType]);
 
     return (
@@ -118,6 +100,8 @@ export const RouteProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                 setBlockedRoutes,
                 destinationMode,
                 setDestinationMode,
+                shouldCenterOnUser,
+                setShouldCenterOnUser,
             }}
         >
             {children}
@@ -125,11 +109,6 @@ export const RouteProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     );
 };
 
-/**
- * Hook personalizado para acceder al RouteContext
- * @throws Error si se usa fuera del RouteProvider
- * @returns Objeto con todos los estados y setters del contexto
- */
 export const useRouteContext = () => {
     const context = useContext(RouteContext);
     if (!context) {
