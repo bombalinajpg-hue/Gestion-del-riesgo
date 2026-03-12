@@ -32,9 +32,10 @@ export default function MainMenu({ navigation }: DrawerContentComponentProps) {
         <Text style={styles.label}>Tipo de Emergencia</Text>
         <View style={styles.buttonGroup}>
           {[
-            { label: 'Ninguna', value: 'ninguna' },
-            { label: '🌊 Inundación', value: 'inundacion' },
-            { label: '⛰️ Derrumbe', value: 'derrumbe' },
+            { label: 'Ninguna',            value: 'ninguna',            emoji: '—'  },
+            { label: 'Inundación',         value: 'inundacion',         emoji: '🌊' },
+            { label: 'Movimiento en masa', value: 'movimiento_en_masa', emoji: '⛰️' },
+            { label: 'Avenida torrencial', value: 'avenida_torrencial', emoji: '🌪️' },
           ].map((option) => (
             <TouchableOpacity
               key={option.value}
@@ -48,19 +49,69 @@ export default function MainMenu({ navigation }: DrawerContentComponentProps) {
                 styles.optionText,
                 emergencyType === option.value && styles.optionTextActive,
               ]}>
-                {option.label}
+                {option.emoji} {option.label}
               </Text>
             </TouchableOpacity>
           ))}
         </View>
 
+        {/* Leyenda de colores segÃºn emergencia activa */}
+        {emergencyType !== 'ninguna' && (
+          <View style={styles.leyendaBox}>
+            <Text style={styles.leyendaTitle}>Leyenda</Text>
+
+            {emergencyType === 'inundacion' && (
+              <>
+                <View style={styles.leyendaRow}>
+                  <View style={[styles.leyendaColor, { backgroundColor: 'rgba(30,144,255,0.4)' }]} />
+                  <Text style={styles.leyendaText}>Amenaza Media</Text>
+                </View>
+                <View style={styles.leyendaRow}>
+                  <View style={[styles.leyendaColor, { backgroundColor: 'rgba(0,0,205,0.5)' }]} />
+                  <Text style={styles.leyendaText}>Amenaza Alta</Text>
+                </View>
+              </>
+            )}
+
+            {emergencyType === 'movimiento_en_masa' && (
+              <>
+                <View style={styles.leyendaRow}>
+                  <View style={[styles.leyendaColor, { backgroundColor: 'rgba(255,215,0,0.6)' }]} />
+                  <Text style={styles.leyendaText}>Amenaza Baja</Text>
+                </View>
+                <View style={styles.leyendaRow}>
+                  <View style={[styles.leyendaColor, { backgroundColor: 'rgba(255,140,0,0.6)' }]} />
+                  <Text style={styles.leyendaText}>Amenaza Media</Text>
+                </View>
+                <View style={styles.leyendaRow}>
+                  <View style={[styles.leyendaColor, { backgroundColor: 'rgba(139,0,0,0.7)' }]} />
+                  <Text style={styles.leyendaText}>Amenaza Alta</Text>
+                </View>
+              </>
+            )}
+
+            {emergencyType === 'avenida_torrencial' && (
+              <>
+                <View style={styles.leyendaRow}>
+                  <View style={[styles.leyendaColor, { backgroundColor: 'rgba(255,100,0,0.5)' }]} />
+                  <Text style={styles.leyendaText}>Amenaza Media</Text>
+                </View>
+                <View style={styles.leyendaRow}>
+                  <View style={[styles.leyendaColor, { backgroundColor: 'rgba(180,0,0,0.6)' }]} />
+                  <Text style={styles.leyendaText}>Amenaza Alta</Text>
+                </View>
+              </>
+            )}
+          </View>
+        )}
+
         {/* Modo de Desplazamiento */}
         <Text style={styles.label}>Modo de Desplazamiento</Text>
         <View style={styles.buttonGroup}>
           {[
-            { label: '🚶 A pie', value: 'foot-walking' },
-            { label: '🚴 Bicicleta', value: 'cycling-regular' },
-            { label: '🚗 Carro', value: 'driving-car' },
+            { label: '🚶 A pie',      value: 'foot-walking'     },
+            { label: '🚴 Bicicleta', value: 'cycling-regular'  },
+            { label: '🚗 Carro',     value: 'driving-car'      },
           ].map((option) => (
             <TouchableOpacity
               key={option.value}
@@ -84,7 +135,7 @@ export default function MainMenu({ navigation }: DrawerContentComponentProps) {
         <Text style={styles.label}>Inicio de la ruta</Text>
         <View style={styles.buttonGroup}>
           {[
-            { label: '📍 Mi ubicación', value: 'gps' },
+            { label: '📍 Mi ubicación',   value: 'gps'    },
             { label: '🗺️ Elegir en mapa', value: 'manual' },
           ].map((option) => (
             <TouchableOpacity
@@ -108,7 +159,7 @@ export default function MainMenu({ navigation }: DrawerContentComponentProps) {
           ))}
         </View>
 
-        {/* Botón principal */}
+        {/* BotÃ³n principal */}
         <TouchableOpacity
           style={styles.mainButton}
           onPress={() => {
@@ -118,9 +169,7 @@ export default function MainMenu({ navigation }: DrawerContentComponentProps) {
             navigation.closeDrawer();
           }}
         >
-          <Text style={styles.mainButtonText}>
-            IR AL PUNTO MÁS CERCANO
-          </Text>
+          <Text style={styles.mainButtonText}>IR AL PUNTO MÁS CERCANO</Text>
         </TouchableOpacity>
 
         {/* Lista destinos */}
@@ -213,6 +262,39 @@ const styles = StyleSheet.create({
   },
   optionTextActive: {
     color: '#ffffff',
+  },
+  leyendaBox: {
+    marginTop: 8,
+    padding: 10,
+    backgroundColor: '#f7f7f7',
+    borderRadius: 10,
+    borderLeftWidth: 4,
+    borderLeftColor: '#118ab2',
+  },
+  leyendaTitle: {
+    fontWeight: '700',
+    color: '#073b4c',
+    fontSize: 12,
+    marginBottom: 6,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  leyendaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  leyendaColor: {
+    width: 16,
+    height: 16,
+    borderRadius: 3,
+    marginRight: 8,
+    borderWidth: 1,
+    borderColor: '#ccc',
+  },
+  leyendaText: {
+    fontSize: 12,
+    color: '#333',
   },
   mainButton: {
     marginTop: 16,

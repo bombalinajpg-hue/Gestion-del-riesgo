@@ -113,3 +113,86 @@ export function isPointInAnyPolygon(
       isPointInPolygon(point, f.geometry.coordinates)
   );
 }
+/**
+ * Verifica si un punto está dentro de algún polígono de una colección
+ * Soporta tanto Polygon como MultiPolygon
+ */
+export function isPointInAnyPolygonOrMulti(
+  point: Point,
+  geoJson: GeoJSON.FeatureCollection
+): boolean {
+  return geoJson.features.some((f) => {
+    if (f.geometry.type === 'Polygon') {
+      return isPointInPolygon(point, f.geometry.coordinates);
+    }
+    if (f.geometry.type === 'MultiPolygon') {
+      return f.geometry.coordinates.some((polygonCoords) =>
+        isPointInPolygon(point, polygonCoords)
+      );
+    }
+    return false;
+  });
+}
+
+/**
+ * Encuentra el punto más cercano en el borde de cualquier polígono
+ * que contenga al punto dado. Soporta Polygon y MultiPolygon.
+ * @returns El punto de salida más cercano al borde, o null si no está en ningún polígono
+ */
+export function findNearestExitPoint(
+  point: Point,
+  geoJson: GeoJSON.FeatureCollection
+): Point | null {
+  let nearestPoint: Point | null = null;
+  let minDistance = Infinity;
+
+  const checkRing = (ring: number[][]) => {
+    for (let i = 0; i < ring.length - 1; i++) {
+      const a = { latitude: ring[i][1], longitude: ring[i][0] };
+      const b = { latitude: ring[i + 1][1], longitude: ring[i + 1][0] };
+      const candidate = nearestPointOnSegment(point, a, b);
+      const dist = euclideanDistance(point, candidate);
+      if (dist < minDistance) {
+        minDistance = dist;
+        nearestPoint = candidate;
+      }
+    }
+  };
+
+  for (const f of geoJson.features) {
+    if (f.geometry.type === 'Polygon') {
+      if (isPointInPolygon(point, f.geometry.coordinates)) {
+        f.geometry.coordinates.forEach(checkRing);
+      }
+    } else if (f.geometry.type === 'MultiPolygon') {
+      for (const polygonCoords of f.geometry.coordinates) {
+        if (isPointInPolygon(point, polygonCoords)) {
+          polygonCoords.forEach(checkRing);
+        }
+      }
+    }
+  }
+
+  return nearestPoint;
+}
+
+/** Proyecta un punto sobre un segmento AB y retorna el punto más cercano */
+function nearestPointOnSegment(p: Point, a: Point, b: Point): Point {
+  const dx = b.longitude - a.longitude;
+  const dy = b.latitude - a.latitude;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return a;
+  let t = ((p.longitude - a.longitude) * dx + (p.latitude - a.latitude) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  return {
+    latitude: a.latitude + t * dy,
+    longitude: a.longitude + t * dx,
+  };
+}
+
+/** Distancia euclidiana simple entre dos puntos (suficiente para comparar distancias cortas) */
+function euclideanDistance(a: Point, b: Point): number {
+  const dx = b.longitude - a.longitude;
+  const dy = b.latitude - a.latitude;
+  return Math.sqrt(dx * dx + dy * dy);
+}

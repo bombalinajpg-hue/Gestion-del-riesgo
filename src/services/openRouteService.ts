@@ -1,6 +1,5 @@
 import axios from 'axios';
-import type { Polygon } from 'geojson';
-import { isPointInAnyPolygon } from '../utils/geometry';
+import { findNearestExitPoint, isPointInAnyPolygonOrMulti } from '../utils/geometry';
 
 const ORS_API_KEY = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjQwOTUyNDJiZjFhYzQzMzc5ZmE0MDMxMGU5NmRmNjY1IiwiaCI6Im11cm11cjY0In0=';
 
@@ -13,57 +12,66 @@ const openRouteService = axios.create({
   },
 });
 
+/**
+ * Calcula ruta entre dos puntos.
+ * Si el usuario está dentro de una zona de amenaza Media o Alta,
+ * calcula primero una salida al borde del polígono y luego al destino.
+ */
 export const getRoute = async (
   start: [number, number],
   end: [number, number],
   profile: 'driving-car' | 'foot-walking' | 'cycling-regular' = 'driving-car',
-  blockedRoutesGeoJson?: GeoJSON.FeatureCollection
+  hazardGeoJson?: GeoJSON.FeatureCollection
 ) => {
   try {
-    let options: any = {};
-
-    console.log('EMERGENCIA ACTIVA:', !!blockedRoutesGeoJson?.features?.length);
-
-
     const startPoint = {
       latitude: start[1],
       longitude: start[0],
     };
 
-    const isStartInDangerZone =
-      blockedRoutesGeoJson &&
-      isPointInAnyPolygon(startPoint, blockedRoutesGeoJson);
+    // Detectar si el usuario está dentro de una zona de amenaza
+    const isInDangerZone =
+      !!hazardGeoJson?.features?.length &&
+      isPointInAnyPolygonOrMulti(startPoint, hazardGeoJson);
 
-    // 👉 SOLO evitamos zonas si NO estamos dentro de una
-    if (!isStartInDangerZone && blockedRoutesGeoJson) {
-      const polygonCoords = blockedRoutesGeoJson.features
-        .filter(
-          (f): f is GeoJSON.Feature<Polygon> =>
-            f.geometry.type === 'Polygon'
-        )
-        .map((f) => f.geometry.coordinates);
+    console.log('Usuario en zona de peligro:', isInDangerZone);
 
-      if (polygonCoords.length > 0) {
-        options.avoid_polygons = {
-          type: 'MultiPolygon',
-          coordinates: polygonCoords,
-        };
+    let coordinates: [number, number][];
+
+    if (isInDangerZone && hazardGeoJson) {
+      // Encontrar el punto de salida más cercano al borde del polígono
+      const exitPoint = findNearestExitPoint(startPoint, hazardGeoJson);
+
+      if (exitPoint) {
+        console.log('Punto de salida calculado:', exitPoint);
+        // Ruta de tres puntos: inicio → salida del polígono → destino
+        coordinates = [
+          start,
+          [exitPoint.longitude, exitPoint.latitude],
+          end,
+        ];
+      } else {
+        // No se encontró punto de salida, ir directo al destino
+        coordinates = [start, end];
       }
+    } else {
+      coordinates = [start, end];
     }
 
-    const body: any = {
-      coordinates: [start, end],
+    const body = {
+      coordinates,
       format: 'json',
-      ...(Object.keys(options).length > 0 && { options }),
     };
 
     const response = await openRouteService.post(`/${profile}`, body);
-    return response.data;
+
+    return {
+      data: response.data,
+      isInDangerZone,
+    };
+
   } catch (error: any) {
-    console.error(
-      'Error al obtener la ruta:',
-      error.response?.data || error
-    );
+    console.error('Error al obtener la ruta:', error.response?.data || error);
     throw error;
   }
 };

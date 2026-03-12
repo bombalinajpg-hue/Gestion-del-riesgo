@@ -1,7 +1,7 @@
 /**
  * Componente principal del mapa
- * Gestiona ubicación, cálculo de rutas, validación de zonas bloqueadas
- * y renderizado del mapa con marcadores y polilíneas
+ * Gestiona ubicaciÃ³n, cÃ¡lculo de rutas, validaciÃ³n de zonas bloqueadas
+ * y renderizado del mapa con marcadores y polilÃ­neas
  */
 
 import { getRoute } from '@/src/services/openRouteService';
@@ -12,10 +12,10 @@ import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import MapView, { Geojson, Marker, Polyline } from 'react-native-maps';
 import { useRouteContext } from '../context/RouteContext';
-import derrumbeData from '../data/amenaza_derrumbe.json';
-import inundacionData from '../data/amenaza_inundacion.json';
+import avenidaTorrencialData from '../data/amenaza_avenida_torrencial.json';
+import InundacionData from '../data/amenaza_inundacion.json';
+import movimientoMasaData from '../data/amenaza_movimiento_en_masa.json';
 import destinos from '../data/destinos.json';
-import { routeIntersectsBlocked } from '../src/utils/geometry';
 import { getDestinoMasCercano } from '../src/utils/getDestinoMasCercano';
 
 type LatLngTuple = [number, number];
@@ -27,10 +27,11 @@ export default function MapViewContainer() {
   const [routeCoords, setRouteCoords] = useState<{ latitude: number; longitude: number }[]>([]);
   const [isRecalculating, setIsRecalculating] = useState(false);
   const [evacuando, setEvacuando] = useState(false);
+  const [destinoFinal, setDestinoFinal] = useState<any>(null);
+  const [alertaDangerMostrada, setAlertaDangerMostrada] = useState(false);
 
   const {
     selectedDestination,
-    blockedRoutes,
     routeProfile,
     shouldCalculateRoute,
     setShouldCalculateRoute,
@@ -43,47 +44,59 @@ export default function MapViewContainer() {
     emergencyType,
   } = useRouteContext();
 
-  const derrumbeMedia = {
-    ...derrumbeData,
-    features: derrumbeData.features.filter(f => f.properties?.Categoria === "Media")
+  // â”€â”€ Movimiento en masa â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const mmBaja = {
+    ...movimientoMasaData,
+    features: movimientoMasaData.features.filter(f => f.properties?.Categoria === "Baja")
   } as any;
 
-  const derrumbeAlta = {
-    ...derrumbeData,
-    features: derrumbeData.features.filter(f => f.properties?.Categoria === "Alta")
+  const mmMedia = {
+    ...movimientoMasaData,
+    features: movimientoMasaData.features.filter(f => f.properties?.Categoria === "Media")
   } as any;
 
-  const amenazaMedia = {
-    ...inundacionData,
-    features: inundacionData.features.filter(f => f.properties?.Categoria === "Media")
+  const mmAlta = {
+    ...movimientoMasaData,
+    features: movimientoMasaData.features.filter(f => f.properties?.Categoria === "Alta")
   } as any;
 
-  const amenazaAlta = {
-    ...inundacionData,
-    features: inundacionData.features.filter(f => f.properties?.Categoria === "Alta")
+  // â”€â”€ InundaciÃ³n â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const InundacionMedia = {
+    ...InundacionData,
+    features: InundacionData.features.filter(f => f.properties?.Categoria === "Media")
+  } as any;
+
+  const InundacionAlta = {
+    ...InundacionData,
+    features: InundacionData.features.filter(f => f.properties?.Categoria === "Alta")
+  } as any;
+
+  // â”€â”€ Avenida torrencial â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const avenidaMedia = {
+    ...avenidaTorrencialData,
+    features: avenidaTorrencialData.features.filter(f => f.properties?.Categoria === "Media")
+  } as any;
+
+  const avenidaAlta = {
+    ...avenidaTorrencialData,
+    features: avenidaTorrencialData.features.filter(f => f.properties?.Categoria === "Alta")
   } as any;
 
   const navigation = useNavigation();
 
-  /**
-   * Seguimiento en tiempo real
-   */
   useEffect(() => {
     let subscription: Location.LocationSubscription;
 
     (async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert('Permiso denegado', 'Se necesita acceso a tu ubicación.');
+        Alert.alert('Permiso denegado', 'Se necesita acceso a tu ubicaciÃ³n.');
         setLoading(false);
         return;
       }
 
       subscription = await Location.watchPositionAsync(
-        {
-          accuracy: Location.Accuracy.High,
-          distanceInterval: 3,
-        },
+        { accuracy: Location.Accuracy.High, distanceInterval: 3 },
         (loc) => {
           setLocation(loc.coords);
           setLoading(false);
@@ -91,57 +104,36 @@ export default function MapViewContainer() {
       );
     })();
 
-    return () => {
-      if (subscription) subscription.remove();
-    };
+    return () => { if (subscription) subscription.remove(); };
   }, []);
 
-  /**
-   * Consumo de ruta + detección de desviación
-   */
   useEffect(() => {
     if (!location || routeCoords.length === 0) return;
 
     if (isOffRoute(location, routeCoords) && !isRecalculating) {
-      console.log("Fuera de ruta, recalculando...");
       setIsRecalculating(true);
       setShouldCalculateRoute(true);
       return;
     }
 
-    const remainingRoute = routeCoords.filter((coord) => {
-      const distance = getDistance(
-        location.latitude,
-        location.longitude,
-        coord.latitude,
-        coord.longitude
-      );
-      return distance > 10;
-    });
+    const remainingRoute = routeCoords.filter((coord) =>
+      getDistance(location.latitude, location.longitude, coord.latitude, coord.longitude) > 10
+    );
 
     setRouteCoords(remainingRoute);
 
-    // Si llegó al destino
     if (remainingRoute.length < 3 && evacuando) {
       setEvacuando(false);
-      Alert.alert('✅ Llegaste', 'Has llegado al punto de evacuación.');
+      Alert.alert('✅ Llegaste', 'Has llegado al punto de evacuaciónn.');
     }
-
   }, [location]);
 
-  /**
-   * Limpia punto manual al cambiar a GPS
-   */
   useEffect(() => {
     if (startMode === 'gps') setStartPoint(null);
   }, [startMode]);
 
-  /**
-   * Cálculo de ruta
-   */
   useEffect(() => {
-    if (!shouldCalculateRoute) return;
-    if (!location) return;
+    if (!shouldCalculateRoute || !location) return;
 
     let finalDestination = selectedDestination;
 
@@ -163,6 +155,8 @@ export default function MapViewContainer() {
       }
     }
 
+    setDestinoFinal(finalDestination);
+
     if (!finalDestination) {
       setShouldCalculateRoute(false);
       setIsRecalculating(false);
@@ -174,68 +168,68 @@ export default function MapViewContainer() {
         ? [startPoint.lng, startPoint.lat]
         : [location.longitude, location.latitude];
 
-    const end: [number, number] = [
-      finalDestination.lng,
-      finalDestination.lat,
-    ];
+    const end: [number, number] = [finalDestination.lng, finalDestination.lat];
 
-    const relevantBlockedRoutes = {
-      ...blockedRoutes,
-      features: blockedRoutes.features.filter(
-        (f) => !f.properties?.profile || f.properties.profile === routeProfile
-      ),
-    };
+    // Construir GeoJSON de amenaza según emergencia activa (solo Media y Alta)
 
-    getRoute(start, end, routeProfile, relevantBlockedRoutes)
-      .then((route) => {
-        const encodedPolyline = route.routes[0]?.geometry;
-        if (!encodedPolyline) throw new Error('No geometry');
+    const hazardGeoJson: GeoJSON.FeatureCollection | undefined =
+  emergencyType === 'ninguna' ? undefined : {
+    type: 'FeatureCollection',
+    features: (
+      emergencyType === 'inundacion' ? InundacionData.features :
+      emergencyType === 'movimiento_en_masa' ? movimientoMasaData.features :
+      emergencyType === 'avenida_torrencial' ? avenidaTorrencialData.features :
+      []
+    ).filter((f: any) =>
+      f.properties?.Categoria === 'Media' || f.properties?.Categoria === 'Alta'
+    ) as GeoJSON.Feature[],
+  };
 
-        const coords = (polyline.decode(encodedPolyline) as LatLngTuple[])
-          .map(([lat, lng]) => ({
-            latitude: lat,
-            longitude: lng,
-          }));
+getRoute(start, end, routeProfile, hazardGeoJson)
+  .then(({ data: route, isInDangerZone }) => {
+    if (isInDangerZone && !alertaDangerMostrada) {
+      setAlertaDangerMostrada(true);
+      Alert.alert(
+        '⚠️ Estás en zona de riesgo',
+        'Se calculó una ruta de salida. Sigue las instrucciones y aléjate del área peligrosa.',
+        [{ text: 'Entendido' }]
+      );
+    }
 
-        if (routeIntersectsBlocked(coords, relevantBlockedRoutes)) {
-          setRouteCoords([]);
-        } else {
-          setRouteCoords(coords);
-        }
-      })
+    const encodedPolyline = route.routes[0]?.geometry;
+    if (!encodedPolyline) throw new Error('No geometry');
+
+    const coords = (polyline.decode(encodedPolyline) as LatLngTuple[])
+      .map(([lat, lng]) => ({ latitude: lat, longitude: lng }));
+
+    setRouteCoords(coords);
+  })
       .catch((err) => {
         console.error(err);
-        if (!isRecalculating) {
-          Alert.alert('Error', 'No se pudo calcular la ruta.');
-        }
+        if (!isRecalculating) Alert.alert('Error', 'No se pudo calcular la ruta.');
       })
       .finally(() => {
         setShouldCalculateRoute(false);
         setIsRecalculating(false);
       });
-
   }, [shouldCalculateRoute]);
 
-  /**
-   * Iniciar evacuación desde botón flotante
-   */
   const handleIniciarEvacuacion = () => {
     if (!location) {
       Alert.alert('Sin ubicación', 'Esperando señal GPS...');
       return;
     }
     setEvacuando(true);
+    setAlertaDangerMostrada(false);
     setDestinationMode('closest');
     setSelectedDestination(null);
     setShouldCalculateRoute(true);
   };
 
-  /**
-   * Cancelar evacuación
-   */
   const handleCancelarEvacuacion = () => {
     setEvacuando(false);
     setRouteCoords([]);
+    setAlertaDangerMostrada(false);
   };
 
   if (loading || !location)
@@ -251,7 +245,6 @@ export default function MapViewContainer() {
   return (
     <View style={styles.container}>
 
-      {/* Botón menú */}
       <TouchableOpacity
         onPress={() => navigation.dispatch(DrawerActions.openDrawer())}
         style={styles.menuButton}
@@ -259,7 +252,6 @@ export default function MapViewContainer() {
         <Text style={{ fontSize: 24 }}>☰</Text>
       </TouchableOpacity>
 
-      {/* Banner de recalculando */}
       {isRecalculating && (
         <View style={styles.recalculatingBanner}>
           <ActivityIndicator size="small" color="#ffffff" />
@@ -267,7 +259,6 @@ export default function MapViewContainer() {
         </View>
       )}
 
-      {/* Banner evacuando */}
       {evacuando && !isRecalculating && routeCoords.length > 0 && (
         <View style={styles.evacuandoBanner}>
           <Text style={styles.evacuandoText}>🚨 Dirigiéndote al punto seguro</Text>
@@ -277,13 +268,18 @@ export default function MapViewContainer() {
       <MapView
         style={styles.map}
         initialRegion={{
-          latitude: location.latitude,
-          longitude: location.longitude,
-          latitudeDelta: 0.01,
-          longitudeDelta: 0.01,
+          latitude: 4.8696,
+          longitude: -75.6211,
+          latitudeDelta: 0.02,
+          longitudeDelta: 0.02,
         }}
         showsUserLocation
         showsMyLocationButton
+        showsCompass={true}
+        onRegionChange={(region) => {
+          if (startMode !== 'manual') return;
+          setStartPoint({ lat: region.latitude, lng: region.longitude });
+        }}
         onPress={(e) => {
           if (startMode !== 'manual') return;
           const { latitude, longitude } = e.nativeEvent.coordinate;
@@ -291,58 +287,81 @@ export default function MapViewContainer() {
         }}
       >
 
-        {/* Ruta activa */}
         {routeCoords.length > 0 && (
-          <Polyline
-            coordinates={routeCoords}
-            strokeColor="#2196f3"
-            strokeWidth={4}
-          />
+          <Polyline coordinates={routeCoords} strokeColor="#2196f3" strokeWidth={4} />
         )}
 
-        {/* Inundación */}
+        {/* â”€â”€ INUNDACIÃ“N: azul â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
         {emergencyType === "inundacion" && (
           <>
             <Geojson
-              geojson={amenazaMedia}
-              strokeColor="rgba(255,165,0,0.3)"
-              fillColor="rgba(255,165,0,0.08)"
+              geojson={InundacionMedia}
+              strokeColor="rgba(30,144,255,0.5)"
+              fillColor="rgba(30,144,255,0.12)"
               strokeWidth={1}
             />
             <Geojson
-              geojson={amenazaAlta}
-              strokeColor="rgba(255,0,0,0.3)"
-              fillColor="rgba(255,0,0,0.08)"
+              geojson={InundacionAlta}
+              strokeColor="rgba(0,0,205,0.6)"
+              fillColor="rgba(0,0,205,0.18)"
               strokeWidth={1}
             />
           </>
         )}
 
-        {/* Derrumbe */}
-        {emergencyType === "derrumbe" && (
+        {/* â”€â”€ MOVIMIENTO EN MASA: amarilloâ†’rojo â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+        {emergencyType === "movimiento_en_masa" && (
           <>
             <Geojson
-              geojson={derrumbeMedia}
-              strokeColor="rgba(255,140,0,0.4)"
-              fillColor="rgba(255,140,0,0.1)"
+              geojson={mmBaja}
+              strokeColor="rgba(255,215,0,0.5)"
+              fillColor="rgba(255,215,0,0.12)"
               strokeWidth={1}
             />
             <Geojson
-              geojson={derrumbeAlta}
-              strokeColor="rgba(139,0,0,0.5)"
-              fillColor="rgba(139,0,0,0.15)"
+              geojson={mmMedia}
+              strokeColor="rgba(255,140,0,0.5)"
+              fillColor="rgba(255,140,0,0.12)"
+              strokeWidth={1}
+            />
+            <Geojson
+              geojson={mmAlta}
+              strokeColor="rgba(139,0,0,0.6)"
+              fillColor="rgba(139,0,0,0.18)"
               strokeWidth={1}
             />
           </>
         )}
 
-        {/* Punto inicial manual */}
+        {/* â”€â”€ AVENIDA TORRENCIAL: naranjaâ†’rojo oscuro â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+        {emergencyType === "avenida_torrencial" && (
+          <>
+            <Geojson
+              geojson={avenidaMedia}
+              strokeColor="rgba(255,100,0,0.5)"
+              fillColor="rgba(255,100,0,0.12)"
+              strokeWidth={1}
+            />
+            <Geojson
+              geojson={avenidaAlta}
+              strokeColor="rgba(180,0,0,0.6)"
+              fillColor="rgba(180,0,0,0.18)"
+              strokeWidth={1}
+            />
+          </>
+        )}
+
+        {destinoFinal && (
+          <Marker
+            coordinate={{ latitude: destinoFinal.lat, longitude: destinoFinal.lng }}
+            title={destinoFinal.nombre}
+            pinColor="green"
+          />
+        )}
+
         {startMode === 'manual' && startPoint && (
           <Marker
-            coordinate={{
-              latitude: startPoint.lat,
-              longitude: startPoint.lng,
-            }}
+            coordinate={{ latitude: startPoint.lat, longitude: startPoint.lng }}
             title="Punto inicial"
             pinColor="orange"
           />
@@ -350,19 +369,12 @@ export default function MapViewContainer() {
 
       </MapView>
 
-      {/* Botón flotante INICIAR EVACUACIÓN */}
       {!evacuando ? (
-        <TouchableOpacity
-          style={styles.evacuarButton}
-          onPress={handleIniciarEvacuacion}
-        >
+        <TouchableOpacity style={styles.evacuarButton} onPress={handleIniciarEvacuacion}>
           <Text style={styles.evacuarButtonText}>🚨 INICIAR EVACUACIÓN</Text>
         </TouchableOpacity>
       ) : (
-        <TouchableOpacity
-          style={styles.cancelarButton}
-          onPress={handleCancelarEvacuacion}
-        >
+        <TouchableOpacity style={styles.cancelarButton} onPress={handleCancelarEvacuacion}>
           <Text style={styles.cancelarButtonText}>✕ CANCELAR EVACUACIÓN</Text>
         </TouchableOpacity>
       )}
@@ -373,14 +385,14 @@ export default function MapViewContainer() {
 
 const getDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
   const R = 6371e3;
-  const φ1 = lat1 * Math.PI / 180;
-  const φ2 = lat2 * Math.PI / 180;
-  const Δφ = (lat2 - lat1) * Math.PI / 180;
-  const Δλ = (lon2 - lon1) * Math.PI / 180;
+  const phi1 = lat1 * Math.PI / 180;
+  const phi2 = lat2 * Math.PI / 180;
+  const dPhi = (lat2 - lat1) * Math.PI / 180;
+  const dLambda = (lon2 - lon1) * Math.PI / 180;
   const a =
-    Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
-    Math.cos(φ1) * Math.cos(φ2) *
-    Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+    Math.sin(dPhi / 2) * Math.sin(dPhi / 2) +
+    Math.cos(phi1) * Math.cos(phi2) *
+    Math.sin(dLambda / 2) * Math.sin(dLambda / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
 };
@@ -436,11 +448,7 @@ const styles = StyleSheet.create({
     gap: 8,
     zIndex: 10,
   },
-  recalculatingText: {
-    color: '#ffffff',
-    fontWeight: '600',
-    fontSize: 13,
-  },
+  recalculatingText: { color: '#ffffff', fontWeight: '600', fontSize: 13 },
   evacuandoBanner: {
     position: 'absolute',
     top: 50,
@@ -451,11 +459,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     zIndex: 10,
   },
-  evacuandoText: {
-    color: '#ffffff',
-    fontWeight: '600',
-    fontSize: 13,
-  },
+  evacuandoText: { color: '#ffffff', fontWeight: '600', fontSize: 13 },
   evacuarButton: {
     position: 'absolute',
     bottom: 40,
@@ -470,12 +474,7 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 8,
   },
-  evacuarButtonText: {
-    color: '#ffffff',
-    fontWeight: 'bold',
-    fontSize: 16,
-    letterSpacing: 1,
-  },
+  evacuarButtonText: { color: '#ffffff', fontWeight: 'bold', fontSize: 16, letterSpacing: 1 },
   cancelarButton: {
     position: 'absolute',
     bottom: 40,
@@ -486,9 +485,5 @@ const styles = StyleSheet.create({
     borderRadius: 30,
     elevation: 8,
   },
-  cancelarButtonText: {
-    color: '#ffffff',
-    fontWeight: 'bold',
-    fontSize: 16,
-  },
+  cancelarButtonText: { color: '#ffffff', fontWeight: 'bold', fontSize: 16 },
 });

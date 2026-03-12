@@ -5,7 +5,7 @@
       "type": "Feature",
       "properties": {
         "profile": "foot-walking",
-        "reason": "inundacion",
+        "reason": "InundaciÃ³n",
         "zona": "Norte"
       },
       "geometry": {
@@ -23,7 +23,7 @@
       "type": "Feature",
       "properties": {
         "profile": "foot-walking",
-        "reason": "inundacion",
+        "reason": "InundaciÃ³n",
         "zona": "Centro"
       },
       "geometry": {
@@ -41,7 +41,7 @@
       "type": "Feature",
       "properties": {
         "profile": "foot-walking",
-        "reason": "inundacion",
+        "reason": "InundaciÃ³n",
         "zona": "Sur"
       },
       "geometry": {
@@ -59,7 +59,7 @@
       "type": "Feature",
       "properties": {
         "profile": "foot-walking",
-        "reason": "derrumbe",
+        "reason": "Movimiento_en_Masa",
         "zona": "Occidente"
       },
       "geometry": {

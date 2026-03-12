@@ -1,7 +1,7 @@
 // context/RouteContext.tsx
 /**
- * Context para manejo global del estado de rutas y navegación
- * Gestiona configuración de rutas, puntos de inicio/destino, tipo de emergencia
+ * Context para manejo global del estado de rutas y navegaciÃ³n
+ * Gestiona configuraciÃ³n de rutas, puntos de inicio/destino, tipo de emergencia
  * y zonas bloqueadas cargadas desde archivo JSON
  */
 
@@ -10,7 +10,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import rawblockedRoutesJson from '../data/blockedRoutes.json';
 import { EmergencyType, RouteProfile, StartMode, StartPoint } from '../src/types/types';
 
-/** Modo de selección de destino: específico o más cercano */
+/** Modo de selecciÃ³n de destino: especÃ­fico o mÃ¡s cercano */
 type DestinationMode = 'selected' | 'closest';
 
 /** Carga inicial de rutas bloqueadas desde JSON */
@@ -25,7 +25,7 @@ interface Destination {
     lng: number;
 }
 
-/** Tipo del contexto con todos los estados y setters de la aplicación */
+/** Tipo del contexto con todos los estados y setters de la aplicaciÃ³n */
 interface RouteContextType {
     routeProfile: RouteProfile;
     setRouteProfile: React.Dispatch<React.SetStateAction<RouteProfile>>;
@@ -49,7 +49,7 @@ const RouteContext = createContext<RouteContextType | undefined>(undefined);
 
 /**
  * Provider del contexto de rutas
- * Inicializa estados y maneja filtrado de zonas bloqueadas según tipo de emergencia
+ * Inicializa estados y maneja filtrado de zonas bloqueadas segÃºn tipo de emergencia
  */
 export const RouteProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const [routeProfile, setRouteProfile] = useState<RouteProfile>('foot-walking');
@@ -74,7 +74,7 @@ export const RouteProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }, []);
 
     /**
-     * Filtra rutas bloqueadas según el tipo de emergencia seleccionado
+     * Filtra rutas bloqueadas segÃºn el tipo de emergencia seleccionado
      * Si no hay emergencia, limpia las zonas bloqueadas
      * Si hay emergencia, filtra features que coincidan con el tipo
      */
@@ -96,7 +96,7 @@ export const RouteProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         };
 
         setBlockedRoutes(filteredCollection);
-        console.log(`🚨 Rutas bloqueadas por ${emergencyType} cargadas`, filteredCollection);
+        console.log(`ðŸš¨ Rutas bloqueadas por ${emergencyType} cargadas`, filteredCollection);
     }, [emergencyType]);
 
     return (
