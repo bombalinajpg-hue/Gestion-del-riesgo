@@ -213,7 +213,7 @@ export default function MainMenu({ navigation }: DrawerContentComponentProps) {
 }
 
 const styles = StyleSheet.create({
-  wrapper: { flex: 1, backgroundColor: '#073b4c', padding: 16 },
+  wrapper: { flex: 1, backgroundColor: '#073b4c', padding: 16, paddingTop: 60 },
   card: { backgroundColor: '#ffffff', borderRadius: 20, padding: 16, elevation: 8 },
   header: { backgroundColor: '#ef476f', padding: 14, borderRadius: 14, alignItems: 'center', marginBottom: 16 },
   headerText: { color: '#ffffff', fontWeight: 'bold', fontSize: 18 },
