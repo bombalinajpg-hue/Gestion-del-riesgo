@@ -23,10 +23,9 @@ import { getDestinoMasCercano } from '../src/utils/getDestinoMasCercano';
 type LatLngTuple = [number, number];
 
 const MAP_TYPES: { label: string; value: MapType; icon: string }[] = [
-  { label: 'Estándar',  value: 'standard',  icon: 'map'     },
-  { label: 'Satélite',  value: 'satellite', icon: 'public'  },
-  { label: 'Híbrido',   value: 'hybrid',    icon: 'layers'  },
-  { label: 'Relieve',   value: 'terrain',   icon: 'terrain' },
+  { label: 'Estándar',  value: 'standard',  icon: 'map'    },
+  { label: 'Satélite',  value: 'satellite', icon: 'public' },
+  { label: 'Híbrido',   value: 'hybrid',    icon: 'layers' },
 ];
 
 // ── Brújula personalizada ──────────────────────────────────────────────────
@@ -52,6 +51,7 @@ export default function MapViewContainer() {
   const [location, setLocation] = useState<Location.LocationObjectCoords | null>(null);
   const [loading, setLoading] = useState(true);
   const [routeCoords, setRouteCoords] = useState<{ latitude: number; longitude: number }[]>([]);
+  const [dangerSegment, setDangerSegment] = useState<{ latitude: number; longitude: number }[]>([]);
   const [isRecalculating, setIsRecalculating] = useState(false);
   const [evacuando, setEvacuando] = useState(false);
   const [destinoFinal, setDestinoFinal] = useState<any>(null);
@@ -129,10 +129,16 @@ export default function MapViewContainer() {
   useEffect(() => {
     setPuntoConfirmado(false);
     if (startMode === 'gps') setStartPoint(null);
+    setRouteCoords([]);
+    setDangerSegment([]);
   }, [startMode]);
 
   useEffect(() => {
-    if (startMode === 'manual' && startPoint) setPuntoConfirmado(false);
+    if (startMode === 'manual' && startPoint) {
+      setPuntoConfirmado(false);
+      setRouteCoords([]);
+      setDangerSegment([]);
+    }
   }, [startPoint]);
 
   // ── Recálculo automático ───────────────────────────────────────────────────
@@ -146,7 +152,7 @@ export default function MapViewContainer() {
     const remaining = routeCoords.filter(c =>
       getDistance(location.latitude, location.longitude, c.latitude, c.longitude) > 10
     );
-    setRouteCoords(remaining);
+    if (evacuando) setRouteCoords(remaining);
     if (remaining.length < 3 && evacuando) {
       setEvacuando(false);
       Alert.alert('Llegaste', 'Has llegado al punto de evacuación.');
@@ -190,14 +196,25 @@ export default function MapViewContainer() {
     };
 
     getRoute(start, end, routeProfile, hazardGeoJson)
-      .then(({ data: route, isInDangerZone }) => {
+      .then(({ data: route, isInDangerZone, exitPoint }) => {
         if (isInDangerZone && !alertaDangerMostrada) {
           setAlertaDangerMostrada(true);
           Alert.alert('⚠️ Estás en zona de riesgo', 'Se calculó una ruta de salida. Sigue las instrucciones y aléjate del área peligrosa.', [{ text: 'Entendido' }]);
         }
+        // Dibujar segmento rojo: inicio → primer punto de la ruta azul
         const enc = route.routes[0]?.geometry;
         if (!enc) throw new Error('No geometry');
-        setRouteCoords((polyline.decode(enc) as LatLngTuple[]).map(([lat, lng]) => ({ latitude: lat, longitude: lng })));
+        const decodedCoords = (polyline.decode(enc) as LatLngTuple[]).map(([lat, lng]) => ({ latitude: lat, longitude: lng }));
+        setRouteCoords(decodedCoords);
+
+        if (isInDangerZone && exitPoint) {
+          setDangerSegment([
+            { latitude: start[1], longitude: start[0] },
+            decodedCoords[0],
+          ]);
+        } else {
+          setDangerSegment([]);
+        }
       })
       .catch((err) => {
         console.error(err);
@@ -216,7 +233,7 @@ export default function MapViewContainer() {
   };
 
   const handleCancelarEvacuacion = () => {
-    setEvacuando(false); setRouteCoords([]); setDestinoFinal(null);
+    setEvacuando(false); setRouteCoords([]); setDestinoFinal(null); setDangerSegment([]);
     setAlertaDangerMostrada(false); setPuntoConfirmado(false);
     setStartPoint(null); setStartMode('gps'); setEmergencyType('ninguna');
     setSelectedDestination(null); setDestinationMode('selected'); setShouldCalculateRoute(false);
@@ -302,7 +319,7 @@ export default function MapViewContainer() {
       )}
       {evacuando && !isRecalculating && routeCoords.length > 0 && (
         <View style={styles.evacuandoBanner}>
-          <Text style={styles.evacuandoText}>Dirigiéndote al punto</Text>
+          <Text style={styles.evacuandoText}>🚨  Dirigiéndote al punto seguro</Text>
         </View>
       )}
 
@@ -321,6 +338,7 @@ export default function MapViewContainer() {
         }}
       >
         {routeCoords.length > 0 && <Polyline coordinates={routeCoords} strokeColor="#2196f3" strokeWidth={4} />}
+        {dangerSegment.length > 0 && <Polyline coordinates={dangerSegment} strokeColor="#ef476f" strokeWidth={4} />}
 
         {emergencyType === "inundacion" && (
           <>
