@@ -196,7 +196,7 @@ export default function MapViewContainer() {
     };
 
     getRoute(start, end, routeProfile, hazardGeoJson)
-      .then(({ data: route, isInDangerZone, exitPoint }) => {
+      .then(({ data: route, isInDangerZone, exitPoint, dangerRouteGeometry }) => {
         if (isInDangerZone && !alertaDangerMostrada) {
           setAlertaDangerMostrada(true);
           Alert.alert('⚠️ Estás en zona de riesgo', 'Se calculó una ruta de salida. Sigue las instrucciones y aléjate del área peligrosa.', [{ text: 'Entendido' }]);
@@ -205,15 +205,22 @@ export default function MapViewContainer() {
         const enc = route.routes[0]?.geometry;
         if (!enc) throw new Error('No geometry');
         const decodedCoords = (polyline.decode(enc) as LatLngTuple[]).map(([lat, lng]) => ({ latitude: lat, longitude: lng }));
-        setRouteCoords(decodedCoords);
 
-        if (isInDangerZone && exitPoint) {
+        if (isInDangerZone && dangerRouteGeometry) {
+          const dangerCoords = (polyline.decode(dangerRouteGeometry) as LatLngTuple[])
+            .map(([lat, lng]) => ({ latitude: lat, longitude: lng }));
+          const lastDangerPoint = dangerCoords[dangerCoords.length - 1];
+            setDangerSegment(dangerCoords);
+            setRouteCoords([lastDangerPoint, ...decodedCoords]);
+        } else if (isInDangerZone && exitPoint) {
           setDangerSegment([
             { latitude: start[1], longitude: start[0] },
             decodedCoords[0],
           ]);
+          setRouteCoords(decodedCoords);
         } else {
           setDangerSegment([]);
+          setRouteCoords(decodedCoords);
         }
       })
       .catch((err) => {

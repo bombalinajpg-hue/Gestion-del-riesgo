@@ -1,3 +1,4 @@
+import polyline from '@mapbox/polyline';
 import axios from 'axios';
 import { findNearestExitPoint, isPointInAnyPolygonOrMulti } from '../utils/geometry';
 
@@ -12,11 +13,25 @@ const openRouteService = axios.create({
   },
 });
 
-/**
- * Calcula ruta entre dos puntos.
- * Si el usuario está dentro de una zona de amenaza Media o Alta,
- * calcula primero una salida al borde del polígono y luego al destino.
- */
+const buildAvoidPolygons = (geoJson: GeoJSON.FeatureCollection): GeoJSON.Geometry | null => {
+  try {
+    const polygons: GeoJSON.Position[][][] = [];
+    for (const feature of geoJson.features) {
+      if (feature.geometry.type === 'Polygon') {
+        polygons.push(feature.geometry.coordinates);
+      } else if (feature.geometry.type === 'MultiPolygon') {
+        for (const poly of feature.geometry.coordinates) {
+          polygons.push(poly);
+        }
+      }
+    }
+    if (polygons.length === 0) return null;
+    return { type: 'MultiPolygon', coordinates: polygons };
+  } catch {
+    return null;
+  }
+};
+
 export const getRoute = async (
   start: [number, number],
   end: [number, number],
@@ -24,50 +39,85 @@ export const getRoute = async (
   hazardGeoJson?: GeoJSON.FeatureCollection
 ) => {
   try {
-    const startPoint = {
-      latitude: start[1],
-      longitude: start[0],
-    };
+    const startPoint = { latitude: start[1], longitude: start[0] };
 
-    // Detectar si el usuario está dentro de una zona de amenaza
     const isInDangerZone =
       !!hazardGeoJson?.features?.length &&
       isPointInAnyPolygonOrMulti(startPoint, hazardGeoJson);
 
     console.log('Usuario en zona de peligro:', isInDangerZone);
 
-    let coordinates: [number, number][];
+    let exitPointCoords: { latitude: number; longitude: number } | null = null;
+    let dangerRouteGeometry: string | null = null;
 
+    // ── Tramo rojo: start → exitPoint sin avoid_polygons ──────────────────
     if (isInDangerZone && hazardGeoJson) {
-      // Encontrar el punto de salida más cercano al borde del polígono
       const exitPoint = findNearestExitPoint(startPoint, hazardGeoJson);
-
       if (exitPoint) {
-        console.log('Punto de salida calculado:', exitPoint);
-        // Ruta de tres puntos: inicio → salida del polígono → destino
-        coordinates = [
-          start,
-          [exitPoint.longitude, exitPoint.latitude],
-          end,
-        ];
-      } else {
-        // No se encontró punto de salida, ir directo al destino
-        coordinates = [start, end];
+        exitPointCoords = exitPoint;
+        try {
+          const dangerResponse = await openRouteService.post(`/${profile}`, {
+            coordinates: [start, [exitPoint.longitude, exitPoint.latitude]],
+            format: 'json',
+          });
+          dangerRouteGeometry = dangerResponse.data.routes[0]?.geometry ?? null;
+        } catch {
+          dangerRouteGeometry = null;
+        }
       }
-    } else {
-      coordinates = [start, end];
     }
 
-    const body = {
-      coordinates,
-      format: 'json',
+    // ── Determinar inicio del tramo azul ───────────────────────────────────
+    let safeStart: [number, number];
+    if (dangerRouteGeometry) {
+      const decoded = polyline.decode(dangerRouteGeometry);
+      const last = decoded[decoded.length - 1];
+      safeStart = [last[1], last[0]]; // [lng, lat] para ORS
+    } else if (exitPointCoords) {
+      safeStart = [exitPointCoords.longitude, exitPointCoords.latitude];
+    } else {
+      safeStart = start;
+    }
+
+    // ── Tramo azul: safeStart → end con avoid_polygons ────────────────────
+    const avoidPolygons = hazardGeoJson ? buildAvoidPolygons(hazardGeoJson) : null;
+
+    const buildBody = (withAvoid: boolean) => {
+      const body: any = { coordinates: [safeStart, end], format: 'json' };
+      if (withAvoid && avoidPolygons) {
+        body.options = { avoid_polygons: avoidPolygons };
+      }
+      return body;
     };
 
-    const response = await openRouteService.post(`/${profile}`, body);
+    let response;
+    let usedAvoidance = false;
+
+    try {
+      if (avoidPolygons) {
+        response = await openRouteService.post(`/${profile}`, buildBody(true));
+        usedAvoidance = true;
+      } else {
+        response = await openRouteService.post(`/${profile}`, buildBody(false));
+      }
+    } catch (firstError: any) {
+      const status = firstError.response?.status;
+      const msg = JSON.stringify(firstError.response?.data || '');
+      console.warn('ORS rechazó, reintentando sin avoid_polygons:', msg);
+      if (avoidPolygons && (status === 400 || status === 413 || msg.includes('polygon'))) {
+        response = await openRouteService.post(`/${profile}`, buildBody(false));
+        usedAvoidance = false;
+      } else {
+        throw firstError;
+      }
+    }
 
     return {
       data: response.data,
       isInDangerZone,
+      usedAvoidance,
+      exitPoint: exitPointCoords,
+      dangerRouteGeometry,
     };
 
   } catch (error: any) {
