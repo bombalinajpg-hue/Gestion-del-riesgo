@@ -10,116 +10,120 @@ const INSTRUCTIVO_KEY = 'instructivo_visto_v4';
 const { width: SW } = Dimensions.get('window');
 const IMG_W = SW - 80;
 
-// ─── Imágenes reales de la app ────────────────────────────────────────────────
-const imgs = {
-  brujula:            require('../assets/tutorial/brujula.png'),
-  capas:              require('../assets/tutorial/capas.png'),
-  evacuar:            require('../assets/tutorial/evacuar.png'),
-  iniciar_evacuacion: require('../assets/tutorial/iniciar_evacuacion.png'),
-  inicio_de_la_ruta:  require('../assets/tutorial/inicio_de_la_ruta.png'),
-  instituciones:      require('../assets/tutorial/instituciones.png'),
-  mapa:               require('../assets/tutorial/mapa.png'),
-  menu:               require('../assets/tutorial/menu.png'),
-  modo_desplazamiento:require('../assets/tutorial/modo_de_desplazamiento.png'),
-  punto_encuentro:    require('../assets/tutorial/punto_encuentro.png'),
-  riesgo:             require('../assets/tutorial/riesgo.png'),
-  telefono:           require('../assets/tutorial/telefono.png'),
-  tipo_emergencia:    require('../assets/tutorial/tipo_de_emergencia.png'),
-  ubicacion:          require('../assets/tutorial/ubicacion.png'),
+// Las imágenes se definen como funciones require() para que React Native
+// las cargue bajo demanda — solo la imagen del paso actual está en memoria.
+// Cargar las 14 imágenes simultáneamente causaba crash en Android por memoria.
+const getImagen = (key: string) => {
+  switch (key) {
+    case 'brujula':            return require('../assets/tutorial/brujula.png');
+    case 'capas':              return require('../assets/tutorial/capas.png');
+    case 'evacuar':            return require('../assets/tutorial/evacuar.png');
+    case 'iniciar_evacuacion': return require('../assets/tutorial/iniciar_evacuacion.png');
+    case 'inicio_de_la_ruta':  return require('../assets/tutorial/inicio_de_la_ruta.png');
+    case 'instituciones':      return require('../assets/tutorial/instituciones.png');
+    case 'mapa':               return require('../assets/tutorial/mapa.png');
+    case 'menu':               return require('../assets/tutorial/menu.png');
+    case 'modo_desplazamiento':return require('../assets/tutorial/modo_de_desplazamiento.png');
+    case 'punto_encuentro':    return require('../assets/tutorial/punto_encuentro.png');
+    case 'riesgo':             return require('../assets/tutorial/riesgo.png');
+    case 'telefono':           return require('../assets/tutorial/telefono.png');
+    case 'tipo_emergencia':    return require('../assets/tutorial/tipo_de_emergencia.png');
+    case 'ubicacion':          return require('../assets/tutorial/ubicacion.png');
+    default:                   return require('../assets/tutorial/mapa.png');
+  }
 };
 
-// ─── Pasos del tour ───────────────────────────────────────────────────────────
+// ─── Pasos del tour — imagen referenciada por clave, no por objeto ────────────
 const PASOS = [
   {
     seccion: '👋 Bienvenida',
     titulo: '¡Bienvenido/a a Rutas de Evacuación!',
     descripcion: 'Esta app te ayuda a encontrar la ruta más segura para evacuar durante emergencias en Santa Rosa de Cabal.\n\nA continuación te mostramos todas las funciones disponibles.',
-    imagen: imgs.riesgo, // ✅ FIX: imagen de riesgo en bienvenida
+    imagenKey: 'riesgo',
   },
   {
     seccion: '🛠️ Funciones del mapa',
     titulo: '☰ Menú de configuración',
     descripcion: 'Toca el botón ☰ en la esquina superior izquierda para abrir el menú lateral donde configurarás tu evacuación.',
-    imagen: imgs.menu,
+    imagenKey: 'menu',
   },
   {
     seccion: '🛠️ Funciones del mapa',
     titulo: '⬡ Cambiar tipo de mapa',
     descripcion: 'Toca el botón de capas en la esquina superior derecha para cambiar entre mapa Estándar, Satélite e Híbrido.',
-    imagen: imgs.capas,
+    imagenKey: 'capas',
   },
   {
     seccion: '🛠️ Funciones del mapa',
     titulo: '🧭 Brújula',
     descripcion: 'Cuando el mapa no esté orientado al norte, aparece la brújula indicando la dirección norte en todo momento.',
-    imagen: imgs.brujula,
+    imagenKey: 'brujula',
   },
   {
     seccion: '🛠️ Funciones del mapa',
     titulo: '⊙ Centrar en mi ubicación',
     descripcion: 'Toca este botón para centrar el mapa en tu posición GPS actual.',
-    imagen: imgs.ubicacion,
+    imagenKey: 'ubicacion',
   },
   {
     seccion: '🛠️ Funciones del mapa',
     titulo: '📞 Llamar al 123',
     descripcion: 'En cualquier momento puedes tocar este botón para llamar directamente a la línea nacional de emergencias.',
-    imagen: imgs.telefono,
-  },
-  {
-    seccion: '🎨 Zonas de amenaza',
-    titulo: '🗺️ Mapas de zonas de riesgo',
-    descripcion: 'Al seleccionar un tipo de emergencia, el mapa muestra las zonas de amenaza con diferentes colores según el nivel de riesgo.',
-    imagen: imgs.mapa, // ✅ FIX: imagen de mapa en zonas de riesgo
+    imagenKey: 'telefono',
   },
   {
     seccion: '🛠️ Funciones del mapa',
     titulo: '🏃 Calcular ruta de evacuación',
     descripcion: 'Toca el botón rojo con el ícono de persona corriendo para acceder directamente al menú de configuración de tu evacuación.',
-    imagen: imgs.evacuar,
+    imagenKey: 'evacuar',
   },
-  
+  {
+    seccion: '🎨 Zonas de amenaza',
+    titulo: '🗺️ Mapas de zonas de riesgo',
+    descripcion: 'Al seleccionar un tipo de emergencia, el mapa muestra las zonas de amenaza con diferentes colores según el nivel de riesgo.',
+    imagenKey: 'mapa',
+  },
   {
     seccion: '🗺️ Cómo calcular tu ruta',
     titulo: '🚨 Paso 1 — Tipo de emergencia',
     descripcion: 'Abre el menú tocando 🏃 y selecciona el tipo de emergencia activa. El mapa mostrará automáticamente las zonas de riesgo correspondientes.',
-    imagen: imgs.tipo_emergencia,
+    imagenKey: 'tipo_emergencia',
   },
   {
     seccion: '🗺️ Cómo calcular tu ruta',
     titulo: '🚶 Paso 2 — Modo de desplazamiento',
     descripcion: 'Elige cómo te vas a desplazar hacia el punto seguro:\n\n🚶 A pie  ·  🚴 Bicicleta  ·  🚗 Carro\n\nEsto afecta el cálculo de la ruta óptima.',
-    imagen: imgs.modo_desplazamiento,
+    imagenKey: 'modo_desplazamiento',
   },
   {
     seccion: '🗺️ Cómo calcular tu ruta',
     titulo: '📍 Paso 3 — Punto de inicio',
     descripcion: 'Elige desde dónde inicias la evacuación:\n\n📍 Mi ubicación — usa tu GPS actual\n🗺️ Elegir en mapa — toca un punto manualmente en el mapa y confírmalo',
-    imagen: imgs.inicio_de_la_ruta,
+    imagenKey: 'inicio_de_la_ruta',
   },
   {
     seccion: '🗺️ Cómo calcular tu ruta',
     titulo: '🏁 Paso 4 — Punto de encuentro',
     descripcion: 'Elige a dónde evacuar:\n\n📍 Punto más cercano — automático\n🌳 Parques y zonas verdes\n🏟️ Coliseos y canchas\n\nO selecciona una institución en la siguiente sección.',
-    imagen: imgs.punto_encuentro,
+    imagenKey: 'punto_encuentro',
   },
   {
     seccion: '🗺️ Cómo calcular tu ruta',
     titulo: '🏥 Paso 4 (alt.) — Instituciones',
     descripcion: 'También puedes dirigirte a una institución:\n\n🏥 Hospitales y clínicas\n👮 CAI y policía\n🚒 Bomberos\n⛪ Parroquias\n🏫 Escuelas\n\nSeleccionar una institución excluye el punto de encuentro y viceversa.',
-    imagen: imgs.instituciones,
+    imagenKey: 'instituciones',
   },
   {
     seccion: '🗺️ Cómo calcular tu ruta',
     titulo: '🚀 Paso 5 — Iniciar evacuación',
     descripcion: 'Una vez configurado todo, cierra el menú y toca el botón rojo "INICIAR EVACUACIÓN".\n\nVerás:\n🔴 Tramo rojo — dentro de la zona de peligro\n🔵 Tramo azul — ruta segura al destino\n⏱️ Distancia y tiempo estimado',
-    imagen: imgs.iniciar_evacuacion,
+    imagenKey: 'iniciar_evacuacion',
   },
   {
     seccion: '✅ ¡Listo!',
     titulo: '✅ ¡Ya sabes usar la app!',
     descripcion: 'En una emergencia real, mantén la calma y sigue la ruta indicada hacia el punto seguro.\n\nPuedes volver a ver esta guía tocando "Ver guía" en el menú lateral.',
-    imagen: imgs.mapa,
+    imagenKey: 'mapa',
   },
 ];
 
@@ -177,10 +181,10 @@ export default function InstructivoModal() {
 
           <ScrollView showsVerticalScrollIndicator={false}>
 
-            {/* Imagen */}
+            {/* Imagen — solo la del paso actual se carga en memoria */}
             <View style={styles.imgContainer}>
               <Image
-                source={p.imagen}
+                source={getImagen(p.imagenKey)}
                 style={styles.img}
                 resizeMode="contain"
               />
