@@ -1,32 +1,98 @@
 import { MaterialIcons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DrawerContentComponentProps } from '@react-navigation/drawer';
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useRouteContext } from '../context/RouteContext';
 import destinos from '../data/destinos.json';
+import instituciones from '../data/instituciones.json';
+import { EmergencyType, RouteProfile, StartMode } from '../src/types/types';
+
+// ── Íconos por nombre ──────────────────────────────────────────────────────────
+const iconoPorDestino: Record<string, string> = {
+  'Parque Público':             '🌳',
+  'Coliseo Bayron Gaviria':     '🏟️',
+  'Zona Verde 2':               '🌿',
+  'Parque 5a Etapa La Hermosa': '🌳',
+  'Cancha Betania':             '⚽',
+  'Coliseo Timoteo':            '🏟️',
+  'Zona Verde 1':               '🌿',
+};
+
+const iconoPorInstitucion: Record<string, string> = {
+  'Hospital San Vicente':                        '🏥',
+  'CAI Betania':                                 '👮',
+  'Parroquia Ntra. Sra. de las Mercedes':        '⛪',
+  'Clínica Santa Clara':                         '🏥',
+  'Parroquia Franciscana Santísima Trinidad':    '⛪',
+  'Parroquia San Vicente de Paul':               '⛪',
+  'Cruz Roja':                                   '🚑',
+  'Bomberos':                                    '🚒',
+  'Escuela La Hermosa':                          '🏫',
+};
 
 export default function MainMenu({ navigation }: DrawerContentComponentProps) {
+  const scrollRef = useRef<ScrollView>(null);
+  const destinosYRef = useRef<number>(0);
+
   const {
-    routeProfile,
-    setRouteProfile,
-    setSelectedDestination,
-    selectedDestination,
-    emergencyType,
-    setEmergencyType,
-    startMode,
-    setStartMode,
+    routeProfile, setRouteProfile,
+    selectedDestination, setSelectedDestination,
+    selectedInstitucion, setSelectedInstitucion,
+    emergencyType, setEmergencyType,
+    startMode, setStartMode,
     setStartPoint,
-    setDestinationMode,
-    destinationMode,
+    setDestinationMode, destinationMode,
     setShouldCenterOnUser,
+    shouldScrollToDestinos, setShouldScrollToDestinos,
   } = useRouteContext();
+
+  useEffect(() => {
+    if (shouldScrollToDestinos) {
+      setTimeout(() => {
+        scrollRef.current?.scrollTo({ y: destinosYRef.current, animated: true });
+      }, 300);
+      setShouldScrollToDestinos(false);
+    }
+  }, [shouldScrollToDestinos]);
 
   const parametrosBasicosListos =
     emergencyType !== 'ninguna' &&
-    (destinationMode === 'closest' || selectedDestination !== null);
+    routeProfile !== null &&
+    startMode !== null;
+
+  const destinoListo =
+    destinationMode === 'closest' ||
+    selectedDestination !== null ||
+    selectedInstitucion !== null;
+
+  const handleSelectDestino = (destino: typeof destinos[0]) => {
+    setSelectedDestination(destino);
+    setSelectedInstitucion(null);
+    setDestinationMode('selected');
+    navigation.closeDrawer();
+  };
+
+  const handleSelectInstitucion = (inst: typeof instituciones[0]) => {
+    setSelectedInstitucion(inst);
+    setSelectedDestination(null);
+    setDestinationMode('selected');
+    navigation.closeDrawer();
+  };
+
+  const handleSelectClosest = () => {
+    setDestinationMode('closest');
+    setSelectedDestination(null);
+    setSelectedInstitucion(null);
+    navigation.closeDrawer();
+  };
 
   return (
-    <ScrollView style={styles.wrapper} contentContainerStyle={{ paddingBottom: 32 }}>
+    <ScrollView
+      ref={scrollRef}
+      style={styles.wrapper}
+      contentContainerStyle={{ paddingBottom: 32 }}
+    >
       <View style={styles.card}>
 
         {/* Header */}
@@ -46,7 +112,7 @@ export default function MainMenu({ navigation }: DrawerContentComponentProps) {
             <TouchableOpacity
               key={option.value}
               style={[styles.optionButton, emergencyType === option.value && styles.optionButtonActive]}
-              onPress={() => setEmergencyType(option.value as any)}
+              onPress={() => setEmergencyType(option.value as EmergencyType)}
             >
               <Text style={[styles.optionText, emergencyType === option.value && styles.optionTextActive]}>
                 {option.emoji} {option.label}
@@ -55,7 +121,6 @@ export default function MainMenu({ navigation }: DrawerContentComponentProps) {
           ))}
         </View>
 
-        {/* Mensaje inline: falta emergencia */}
         {emergencyType === 'ninguna' && (
           <Text style={styles.inlineHint}>Selecciona el tipo de emergencia para continuar</Text>
         )}
@@ -109,74 +174,41 @@ export default function MainMenu({ navigation }: DrawerContentComponentProps) {
 
         {/* Modo de Desplazamiento */}
         <Text style={styles.label}>Modo de Desplazamiento</Text>
-        <View style={styles.buttonGroup}>
-          {[
-            { label: '🚶 A pie',      value: 'foot-walking'    },
-            { label: '🚴 Bicicleta', value: 'cycling-regular' },
-            { label: '🚗 Carro',     value: 'driving-car'     },
-          ].map((option) => (
-            <TouchableOpacity
-              key={option.value}
-              style={[styles.optionButton, routeProfile === option.value && styles.optionButtonActive]}
-              onPress={() => setRouteProfile(option.value as any)}
-            >
-              <Text style={[styles.optionText, routeProfile === option.value && styles.optionTextActive]}>
-                {option.label}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-
-        {/* Punto de Encuentro */}
-        <Text style={styles.label}>Punto de Encuentro</Text>
-        <View style={{ marginTop: 8 }}>
-          <TouchableOpacity
-            style={[styles.destinoCard, destinationMode === 'closest' && styles.destinoCardActive]}
-            onPress={() => { setDestinationMode('closest'); setSelectedDestination(null); }}
-          >
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <MaterialIcons
-                name="near-me"
-                size={20}
-                color={destinationMode === 'closest' ? '#ffffff' : '#118ab2'}
-                style={{ marginRight: 8 }}
-              />
-              <Text style={[styles.destinoText, destinationMode === 'closest' && styles.destinoTextActive]}>
-                Punto más cercano
-              </Text>
-            </View>
-          </TouchableOpacity>
-
-          {destinos.map((destino) => {
-            const isSelected = destinationMode === 'selected' && selectedDestination?.id === destino.id;
-            return (
+        {emergencyType === 'ninguna' ? (
+          <View style={styles.inicioDeshabilitado}>
+            <MaterialIcons name="lock" size={16} color="#b0bec5" style={{ marginRight: 6 }} />
+            <Text style={styles.inicioDeshabilitadoText}>Selecciona el tipo de emergencia primero</Text>
+          </View>
+        ) : (
+          <View style={styles.buttonGroup}>
+            {[
+              { label: '🚶 A pie',      value: 'foot-walking'    },
+              { label: '🚴 Bicicleta', value: 'cycling-regular' },
+              { label: '🚗 Carro',     value: 'driving-car'     },
+            ].map((option) => (
               <TouchableOpacity
-                key={destino.id}
-                style={[styles.destinoCard, isSelected && styles.destinoCardActive]}
-                onPress={() => { setDestinationMode('selected'); setSelectedDestination(destino); }}
+                key={option.value}
+                style={[styles.optionButton, routeProfile === option.value && styles.optionButtonActive]}
+                onPress={() => setRouteProfile(option.value as RouteProfile)}
               >
-                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                  {destino.id === 1 && <MaterialIcons name="local-fire-department" size={20} color={isSelected ? '#ffffff' : '#ef476f'} style={{ marginRight: 8 }} />}
-                  {destino.id === 2 && <MaterialIcons name="local-police" size={20} color={isSelected ? '#ffffff' : '#118ab2'} style={{ marginRight: 8 }} />}
-                  {destino.id === 3 && <MaterialIcons name="account-balance" size={20} color={isSelected ? '#ffffff' : '#06d6a0'} style={{ marginRight: 8 }} />}
-                  <Text style={[styles.destinoText, isSelected && styles.destinoTextActive]}>{destino.nombre}</Text>
-                </View>
+                <Text style={[styles.optionText, routeProfile === option.value && styles.optionTextActive]}>
+                  {option.label}
+                </Text>
               </TouchableOpacity>
-            );
-          })}
-        </View>
+            ))}
+          </View>
+        )}
 
-        {/* Mensaje inline: falta destino */}
-        {emergencyType !== 'ninguna' && destinationMode !== 'closest' && selectedDestination === null && (
-          <Text style={styles.inlineHint}>Selecciona un punto de encuentro para continuar</Text>
+        {emergencyType !== 'ninguna' && routeProfile === null && (
+          <Text style={styles.inlineHint}>Selecciona cómo te vas a desplazar</Text>
         )}
 
         {/* Inicio de la ruta */}
-        <Text style={[styles.label, !parametrosBasicosListos && styles.labelDisabled]}>
+        <Text style={[styles.label, (emergencyType === 'ninguna' || routeProfile === null) && styles.labelDisabled]}>
           Inicio de la ruta
         </Text>
 
-        {parametrosBasicosListos ? (
+        {emergencyType !== 'ninguna' && routeProfile !== null ? (
           <View style={styles.buttonGroup}>
             {[
               { label: '📍 Mi ubicación',   value: 'gps'    },
@@ -186,7 +218,7 @@ export default function MainMenu({ navigation }: DrawerContentComponentProps) {
                 key={option.value}
                 style={[styles.optionButton, startMode === option.value && styles.optionButtonActive]}
                 onPress={() => {
-                  setStartMode(option.value as any);
+                  setStartMode(option.value as StartMode);
                   setStartPoint(null);
                   if (option.value === 'gps') setShouldCenterOnUser(true);
                   navigation.closeDrawer();
@@ -207,6 +239,118 @@ export default function MainMenu({ navigation }: DrawerContentComponentProps) {
           </View>
         )}
 
+        {emergencyType !== 'ninguna' && routeProfile !== null && startMode === null && (
+          <Text style={styles.inlineHint}>Selecciona desde dónde inicias la evacuación</Text>
+        )}
+
+        {/* ── Punto de Encuentro ─────────────────────────────────────────── */}
+        <View onLayout={(e) => { destinosYRef.current = e.nativeEvent.layout.y; }}>
+          <Text style={styles.sectionHeader}>📍 Punto de Encuentro</Text>
+          <Text style={styles.sectionSubtitle}>Zonas seguras de reunión</Text>
+
+          {parametrosBasicosListos && startMode !== null ? (
+            <View style={{ marginTop: 8 }}>
+              <TouchableOpacity
+                style={[styles.destinoCard, destinationMode === 'closest' && styles.destinoCardActive]}
+                onPress={handleSelectClosest}
+              >
+                <View style={styles.destinoRow}>
+                  <MaterialIcons
+                    name="near-me"
+                    size={20}
+                    color={destinationMode === 'closest' ? '#ffffff' : '#118ab2'}
+                    style={{ marginRight: 8 }}
+                  />
+                  <Text style={[styles.destinoText, destinationMode === 'closest' && styles.destinoTextActive]}>
+                    Punto más cercano
+                  </Text>
+                </View>
+              </TouchableOpacity>
+
+              {destinos.map((destino) => {
+                const isSelected = destinationMode === 'selected' && selectedDestination?.id === destino.id && selectedInstitucion === null;
+                return (
+                  <TouchableOpacity
+                    key={destino.id}
+                    style={[styles.destinoCard, isSelected && styles.destinoCardActive]}
+                    onPress={() => handleSelectDestino(destino)}
+                  >
+                    <View style={styles.destinoRow}>
+                      <Text style={styles.destinoEmoji}>{iconoPorDestino[destino.nombre] ?? '📍'}</Text>
+                      <Text style={[styles.destinoText, isSelected && styles.destinoTextActive]}>
+                        {destino.nombre}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          ) : (
+            <View style={styles.inicioDeshabilitado}>
+              <MaterialIcons name="lock" size={16} color="#b0bec5" style={{ marginRight: 6 }} />
+              <Text style={styles.inicioDeshabilitadoText}>
+                Completa los pasos anteriores para seleccionar el destino
+              </Text>
+            </View>
+          )}
+        </View>
+
+        {/* ── Instituciones ──────────────────────────────────────────────── */}
+        <Text style={styles.sectionHeader}>🏛️ Instituciones</Text>
+        <Text style={styles.sectionSubtitle}>Hospitales, seguridad y más</Text>
+
+        {parametrosBasicosListos && startMode !== null ? (
+          <View style={{ marginTop: 8 }}>
+            {instituciones.map((inst) => {
+              const isSelected = selectedInstitucion?.id === inst.id;
+              return (
+                <TouchableOpacity
+                  key={inst.id}
+                  style={[styles.institucionCard, isSelected && styles.destinoCardActive]}
+                  onPress={() => handleSelectInstitucion(inst)}
+                >
+                  <View style={styles.destinoRow}>
+                    <Text style={styles.destinoEmoji}>{iconoPorInstitucion[inst.nombre] ?? '🏢'}</Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.destinoText, isSelected && styles.destinoTextActive]}>
+                        {inst.nombre}
+                      </Text>
+                      <Text style={[styles.institucionTipo, isSelected && { color: '#ffffffaa' }]}>
+                        {inst.tipo}
+                      </Text>
+                    </View>
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        ) : (
+          <View style={styles.inicioDeshabilitado}>
+            <MaterialIcons name="lock" size={16} color="#b0bec5" style={{ marginRight: 6 }} />
+            <Text style={styles.inicioDeshabilitadoText}>
+              Completa los pasos anteriores para seleccionar una institución
+            </Text>
+          </View>
+        )}
+
+        {parametrosBasicosListos && startMode !== null && !destinoListo && (
+          <Text style={styles.inlineHint}>
+            Selecciona un punto de encuentro o institución para continuar
+          </Text>
+        )}
+
+        {/* ── Ver guía ───────────────────────────────────────────────────── */}
+        <TouchableOpacity
+          style={styles.verGuiaBtn}
+          onPress={async () => {
+            await AsyncStorage.removeItem('instructivo_visto_v4');
+            navigation.closeDrawer();
+          }}
+        >
+          <MaterialIcons name="help-outline" size={18} color="#118ab2" style={{ marginRight: 8 }} />
+          <Text style={styles.verGuiaText}>Ver guía de uso</Text>
+        </TouchableOpacity>
+
       </View>
     </ScrollView>
   );
@@ -219,6 +363,12 @@ const styles = StyleSheet.create({
   headerText: { color: '#ffffff', fontWeight: 'bold', fontSize: 18 },
   label: { fontWeight: '600', color: '#073b4c', marginBottom: 8, marginTop: 12 },
   labelDisabled: { color: '#b0bec5' },
+  sectionHeader: {
+    fontWeight: '700', color: '#073b4c', fontSize: 14,
+    marginTop: 20, marginBottom: 2,
+    borderTopWidth: 1, borderTopColor: '#f0f0f0', paddingTop: 16,
+  },
+  sectionSubtitle: { fontSize: 11, color: '#888', marginBottom: 4 },
   buttonGroup: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8 },
   optionButton: { paddingVertical: 8, paddingHorizontal: 14, borderRadius: 20, backgroundColor: '#f4f4f4', borderWidth: 1, borderColor: '#e0e0e0' },
   optionButtonActive: { backgroundColor: '#118ab2', borderColor: '#118ab2' },
@@ -236,10 +386,20 @@ const styles = StyleSheet.create({
   leyendaRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 4 },
   leyendaColor: { width: 16, height: 16, borderRadius: 3, marginRight: 8, borderWidth: 1, borderColor: '#ccc' },
   leyendaText: { fontSize: 12, color: '#333' },
-  destinoCard: { padding: 14, borderRadius: 12, backgroundColor: '#f7f7f7', marginBottom: 10, borderLeftWidth: 6, borderLeftColor: '#06d6a0', elevation: 3 },
+  destinoCard: {
+    padding: 12, borderRadius: 12, backgroundColor: '#f7f7f7',
+    marginBottom: 8, borderLeftWidth: 4, borderLeftColor: '#06d6a0', elevation: 2,
+  },
+  institucionCard: {
+    padding: 12, borderRadius: 12, backgroundColor: '#f7f7f7',
+    marginBottom: 8, borderLeftWidth: 4, borderLeftColor: '#118ab2', elevation: 2,
+  },
   destinoCardActive: { backgroundColor: '#118ab2', borderLeftColor: '#073b4c' },
-  destinoText: { color: '#073b4c', fontWeight: '500' },
+  destinoRow: { flexDirection: 'row', alignItems: 'center' },
+  destinoEmoji: { fontSize: 18, marginRight: 10, width: 26, textAlign: 'center' },
+  destinoText: { color: '#073b4c', fontWeight: '500', flex: 1 },
   destinoTextActive: { color: '#ffffff' },
+  institucionTipo: { fontSize: 10, color: '#888', marginTop: 1 },
   inicioDeshabilitado: {
     flexDirection: 'row', alignItems: 'center',
     paddingVertical: 10, paddingHorizontal: 12,
@@ -248,4 +408,10 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   inicioDeshabilitadoText: { color: '#b0bec5', fontSize: 12, flex: 1 },
+  verGuiaBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    marginTop: 20, paddingVertical: 12, paddingHorizontal: 16,
+    borderRadius: 12, borderWidth: 1, borderColor: '#118ab2',
+  },
+  verGuiaText: { color: '#118ab2', fontWeight: '600', fontSize: 13 },
 });

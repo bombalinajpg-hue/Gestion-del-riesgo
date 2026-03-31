@@ -9,7 +9,7 @@ import { DrawerActions, useNavigation } from '@react-navigation/native';
 import * as Location from 'expo-location';
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  ActivityIndicator, Alert, Linking, Modal, StyleSheet, Text,
+  ActivityIndicator, Alert, Animated, Linking, Modal, StyleSheet, Text,
   TouchableOpacity, TouchableWithoutFeedback, View
 } from 'react-native';
 import MapView, { Geojson, MapType, Marker, Polyline } from 'react-native-maps';
@@ -18,6 +18,7 @@ import avenidaTorrencialData from '../data/amenaza_avenida_torrencial.json';
 import InundacionData from '../data/amenaza_inundacion.json';
 import movimientoMasaData from '../data/amenaza_movimiento_en_masa.json';
 import destinos from '../data/destinos.json';
+import { fetchPOIs, getCategoryIcon, POIFeature } from '../src/services/poiService';
 import { getDestinoMasCercano } from '../src/utils/getDestinoMasCercano';
 
 type LatLngTuple = [number, number];
@@ -28,7 +29,30 @@ const MAP_TYPES: { label: string; value: MapType; icon: string }[] = [
   { label: 'Híbrido',   value: 'hybrid',    icon: 'layers' },
 ];
 
-// ── Brújula personalizada ──────────────────────────────────────────────────
+const MARKER_SIZE = 22;
+
+const emojiPorInstitucion: Record<string, string> = {
+  'Hospital San Vicente':                        '🏥',
+  'CAI Betania':                                 '👮',
+  'Parroquia Ntra. Sra. de las Mercedes':        '⛪',
+  'Clínica Santa Clara':                         '🏥',
+  'Parroquia Franciscana Santísima Trinidad':    '⛪',
+  'Parroquia San Vicente de Paul':               '⛪',
+  'Cruz Roja':                                   '🚑',
+  'Bomberos':                                    '🚒',
+  'Escuela La Hermosa':                          '🏫',
+};
+
+const emojiPorDestino: Record<string, string> = {
+  'Parque Público':             '🌳',
+  'Coliseo Bayron Gaviria':     '🏟️',
+  'Zona Verde 2':               '🌿',
+  'Parque 5a Etapa La Hermosa': '🌳',
+  'Cancha Betania':             '⚽',
+  'Coliseo Timoteo':            '🏟️',
+  'Zona Verde 1':               '🌿',
+};
+
 function NorthArrow({ heading }: { heading: number }) {
   return (
     <View style={{ transform: [{ rotate: `-${heading}deg` }], alignItems: 'center' }}>
@@ -47,12 +71,13 @@ function NorthArrow({ heading }: { heading: number }) {
 export default function MapViewContainer() {
 
   const mapRef = useRef<MapView>(null);
+  const pulseAnim = useRef(new Animated.Value(1)).current;
 
   const [location, setLocation] = useState<Location.LocationObjectCoords | null>(null);
+  const [locationDenied, setLocationDenied] = useState(false);
   const [loading, setLoading] = useState(true);
   const [routeCoords, setRouteCoords] = useState<{ latitude: number; longitude: number }[]>([]);
   const [dangerSegment, setDangerSegment] = useState<{ latitude: number; longitude: number }[]>([]);
-  const [isRecalculating, setIsRecalculating] = useState(false);
   const [evacuando, setEvacuando] = useState(false);
   const [destinoFinal, setDestinoFinal] = useState<any>(null);
   const [alertaDangerMostrada, setAlertaDangerMostrada] = useState(false);
@@ -60,26 +85,23 @@ export default function MapViewContainer() {
   const [mapType, setMapType] = useState<MapType>('standard');
   const [showMapTypePicker, setShowMapTypePicker] = useState(false);
   const [heading, setHeading] = useState(0);
+  const [pois, setPois] = useState<POIFeature[]>([]);
+  const [resaltarIniciar, setResaltarIniciar] = useState(false);
+  const [resumenRuta, setResumenRuta] = useState<{ distancia: string; tiempo: string } | null>(null);
 
   const {
-    selectedDestination,
+    selectedDestination, setSelectedDestination,
+    selectedInstitucion, setSelectedInstitucion,
     routeProfile,
-    shouldCalculateRoute,
-    setShouldCalculateRoute,
-    startMode,
-    setStartMode,
-    startPoint,
-    setStartPoint,
-    destinationMode,
-    setDestinationMode,
-    emergencyType,
-    setEmergencyType,
-    setSelectedDestination,
-    shouldCenterOnUser,
-    setShouldCenterOnUser,
+    shouldCalculateRoute, setShouldCalculateRoute,
+    startMode, setStartMode,
+    startPoint, setStartPoint,
+    destinationMode, setDestinationMode,
+    emergencyType, setEmergencyType,
+    shouldCenterOnUser, setShouldCenterOnUser,
+    setShouldScrollToDestinos,
   } = useRouteContext();
 
-  // ── Capas GeoJSON ──────────────────────────────────────────────────────────
   const mmBaja     = { ...movimientoMasaData,    features: movimientoMasaData.features.filter(f    => f.properties?.Categoria === "Baja")  } as any;
   const mmMedia    = { ...movimientoMasaData,    features: movimientoMasaData.features.filter(f    => f.properties?.Categoria === "Media") } as any;
   const mmAlta     = { ...movimientoMasaData,    features: movimientoMasaData.features.filter(f    => f.properties?.Categoria === "Alta")  } as any;
@@ -97,7 +119,7 @@ export default function MapViewContainer() {
     (async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert('Permiso denegado', 'Se necesita acceso a tu ubicación.');
+        setLocationDenied(true);
         setLoading(false);
         return;
       }
@@ -125,7 +147,7 @@ export default function MapViewContainer() {
     setShouldCenterOnUser(false);
   }, [shouldCenterOnUser, location]);
 
-  // ── Reset punto confirmado ─────────────────────────────────────────────────
+  // ── Reset al cambiar modo de inicio ───────────────────────────────────────
   useEffect(() => {
     setPuntoConfirmado(false);
     if (startMode === 'gps') setStartPoint(null);
@@ -141,30 +163,34 @@ export default function MapViewContainer() {
     }
   }, [startPoint]);
 
-  // ── Recálculo automático ───────────────────────────────────────────────────
+  // ── Animar botón INICIAR cuando se selecciona un destino ──────────────────
   useEffect(() => {
-    if (!location || routeCoords.length === 0) return;
-    if (isOffRoute(location, routeCoords) && !isRecalculating) {
-      setIsRecalculating(true);
-      setShouldCalculateRoute(true);
-      return;
+    if (selectedDestination || selectedInstitucion) {
+      setResaltarIniciar(true);
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseAnim, { toValue: 1.06, duration: 400, useNativeDriver: true }),
+          Animated.timing(pulseAnim, { toValue: 1, duration: 400, useNativeDriver: true }),
+        ]),
+        { iterations: 4 }
+      ).start(() => setResaltarIniciar(false));
     }
-    const remaining = routeCoords.filter(c =>
-      getDistance(location.latitude, location.longitude, c.latitude, c.longitude) > 10
-    );
-    if (evacuando) setRouteCoords(remaining);
-    if (remaining.length < 3 && evacuando) {
-      setEvacuando(false);
-      Alert.alert('Llegaste', 'Has llegado al punto de evacuación.');
-    }
-  }, [location]);
+  }, [selectedDestination, selectedInstitucion]);
+
+  // ── Cargar POIs ────────────────────────────────────────────────────────────
+  useEffect(() => {
+    fetchPOIs(4.8767129, -75.6272130).then((result) => {
+      console.log('POIs recibidos:', result.length);
+      setPois(result);
+    });
+  }, []);
 
   // ── Calcular ruta ──────────────────────────────────────────────────────────
   useEffect(() => {
     if (!shouldCalculateRoute || !location) return;
     setEvacuando(true);
 
-    let finalDestination = selectedDestination;
+    let finalDestination: any = selectedInstitucion ?? selectedDestination;
 
     if (destinationMode === 'closest') {
       const userLocation = startMode === 'manual' && startPoint
@@ -172,18 +198,20 @@ export default function MapViewContainer() {
         : { latitude: location.latitude, longitude: location.longitude };
       finalDestination = getDestinoMasCercano(userLocation, destinos.filter(d => d.tipo === 'punto_encuentro'));
       if (!finalDestination) {
-        setShouldCalculateRoute(false); setIsRecalculating(false); setEvacuando(false); return;
+        setShouldCalculateRoute(false); setEvacuando(false); return;
       }
     }
 
+    // destinoFinal se actualiza después con el resultado real de getRoute
     setDestinoFinal(finalDestination);
     if (!finalDestination) {
-      setShouldCalculateRoute(false); setIsRecalculating(false); setEvacuando(false); return;
+      setShouldCalculateRoute(false); setEvacuando(false); return;
     }
 
     const start: [number, number] = startMode === 'manual' && startPoint
       ? [startPoint.lng, startPoint.lat]
       : [location.longitude, location.latitude];
+
     const end: [number, number] = [finalDestination.lng, finalDestination.lat];
 
     const hazardGeoJson: GeoJSON.FeatureCollection | undefined = emergencyType === 'ninguna' ? undefined : {
@@ -195,40 +223,57 @@ export default function MapViewContainer() {
       ).filter((f: any) => f.properties?.Categoria === 'Media' || f.properties?.Categoria === 'Alta') as GeoJSON.Feature[],
     };
 
-    getRoute(start, end, routeProfile, hazardGeoJson)
-      .then(({ data: route, isInDangerZone, exitPoint, dangerRouteGeometry }) => {
-        if (isInDangerZone && !alertaDangerMostrada) {
+    const destinosParaEvaluar = destinationMode === 'closest'
+      ? destinos.filter(d => d.tipo === 'punto_encuentro')
+      : [finalDestination];
+
+    const profile = routeProfile ?? 'foot-walking';
+
+    getRoute(start, end, profile, hazardGeoJson, destinosParaEvaluar)
+      .then(({ data: route, isInDangerZone, dangerCoords, destinoFinalCoord }) => {
+
+        if (isInDangerZone && dangerCoords.length > 0 && !alertaDangerMostrada) {
           setAlertaDangerMostrada(true);
-          Alert.alert('⚠️ Estás en zona de riesgo', 'Se calculó una ruta de salida. Sigue las instrucciones y aléjate del área peligrosa.', [{ text: 'Entendido' }]);
+          Alert.alert(
+            '⚠️ Estás en zona de riesgo',
+            'Se calculó una ruta de salida. Sigue las instrucciones y aléjate del área peligrosa.',
+            [{ text: 'Entendido' }]
+          );
         }
-        // Dibujar segmento rojo: inicio → primer punto de la ruta azul
+
+        // Si getRoute encontró un destino más óptimo, actualizar el marcador
+        if (destinoFinalCoord) {
+          setDestinoFinal(destinoFinalCoord);
+        }
+
         const enc = route.routes[0]?.geometry;
         if (!enc) throw new Error('No geometry');
-        const decodedCoords = (polyline.decode(enc) as LatLngTuple[]).map(([lat, lng]) => ({ latitude: lat, longitude: lng }));
 
-        if (isInDangerZone && dangerRouteGeometry) {
-          const dangerCoords = (polyline.decode(dangerRouteGeometry) as LatLngTuple[])
-            .map(([lat, lng]) => ({ latitude: lat, longitude: lng }));
-          const lastDangerPoint = dangerCoords[dangerCoords.length - 1];
-            setDangerSegment(dangerCoords);
-            setRouteCoords([lastDangerPoint, ...decodedCoords]);
-        } else if (isInDangerZone && exitPoint) {
-          setDangerSegment([
-            { latitude: start[1], longitude: start[0] },
-            decodedCoords[0],
-          ]);
-          setRouteCoords(decodedCoords);
-        } else {
-          setDangerSegment([]);
-          setRouteCoords(decodedCoords);
+        // Calcular resumen de distancia y tiempo
+        const summary = route.routes[0]?.summary;
+        if (summary) {
+          const distKm = summary.distance >= 1000
+            ? `${(summary.distance / 1000).toFixed(1)} km`
+            : `${Math.round(summary.distance)} m`;
+          const mins = Math.round(summary.duration / 60);
+          const tiempo = mins < 60
+            ? `${mins} min`
+            : `${Math.floor(mins / 60)}h ${mins % 60}min`;
+          setResumenRuta({ distancia: distKm, tiempo });
         }
+
+        const decodedCoords = (polyline.decode(enc) as LatLngTuple[])
+          .map(([lat, lng]) => ({ latitude: lat, longitude: lng }));
+
+        setDangerSegment(dangerCoords);
+        setRouteCoords(decodedCoords);
       })
       .catch((err) => {
         console.error(err);
-        if (!isRecalculating) Alert.alert('Error', 'No se pudo calcular la ruta.');
+        Alert.alert('Error', 'No se pudo calcular la ruta.');
         setEvacuando(false);
       })
-      .finally(() => { setShouldCalculateRoute(false); setIsRecalculating(false); });
+      .finally(() => { setShouldCalculateRoute(false); });
   }, [shouldCalculateRoute]);
 
   const handleCenterOnUser = () => {
@@ -240,10 +285,21 @@ export default function MapViewContainer() {
   };
 
   const handleCancelarEvacuacion = () => {
-    setEvacuando(false); setRouteCoords([]); setDestinoFinal(null); setDangerSegment([]);
-    setAlertaDangerMostrada(false); setPuntoConfirmado(false);
-    setStartPoint(null); setStartMode('gps'); setEmergencyType('ninguna');
-    setSelectedDestination(null); setDestinationMode('selected'); setShouldCalculateRoute(false);
+    setShouldCalculateRoute(false);
+    setEvacuando(false);
+    setRouteCoords([]);
+    setDangerSegment([]);
+    setDestinoFinal(null);
+    setAlertaDangerMostrada(false);
+    setPuntoConfirmado(false);
+    setStartPoint(null);
+    setStartMode('gps');
+    setEmergencyType('ninguna');
+    setSelectedDestination(null);
+    setSelectedInstitucion(null);
+    setDestinationMode('selected');
+    setResaltarIniciar(false);
+    setResumenRuta(null);
   };
 
   const handleLlamarEmergencia = () => {
@@ -257,6 +313,26 @@ export default function MapViewContainer() {
     );
   };
 
+  // ── Pantallas de estado ────────────────────────────────────────────────────
+  if (locationDenied)
+    return (
+      <View style={styles.loadingContainer}>
+        <MaterialIcons name="location-off" size={48} color="#ef476f" />
+        <Text style={{ marginTop: 16, color: '#073b4c', fontWeight: '700', fontSize: 16 }}>
+          Permiso de ubicación denegado
+        </Text>
+        <Text style={{ marginTop: 8, color: '#555', fontSize: 13, textAlign: 'center', paddingHorizontal: 32 }}>
+          Esta app necesita acceso a tu ubicación para calcular rutas de evacuación.
+        </Text>
+        <TouchableOpacity
+          style={{ marginTop: 20, backgroundColor: '#118ab2', paddingVertical: 12, paddingHorizontal: 24, borderRadius: 20 }}
+          onPress={() => Linking.openSettings()}
+        >
+          <Text style={{ color: '#ffffff', fontWeight: '600' }}>Abrir Configuración</Text>
+        </TouchableOpacity>
+      </View>
+    );
+
   if (loading || !location)
     return (
       <View style={styles.loadingContainer}>
@@ -266,27 +342,27 @@ export default function MapViewContainer() {
     );
 
   const ubicacionLista = startMode === 'gps' || (startMode === 'manual' && startPoint !== null && puntoConfirmado);
-  const destinoListo = destinationMode === 'closest' || selectedDestination !== null;
-  const todosLosParametros = emergencyType !== 'ninguna' && destinoListo && ubicacionLista;
+  const destinoListo = destinationMode === 'closest' || selectedDestination !== null || selectedInstitucion !== null;
+  const todosLosParametros = emergencyType !== 'ninguna' && routeProfile !== null && destinoListo && ubicacionLista;
   const seleccionandoPunto = startMode === 'manual' && !evacuando;
   const puntoPendiente = seleccionandoPunto && startPoint !== null && !puntoConfirmado;
   const isNorth = Math.abs(heading % 360) < 8 || Math.abs(heading % 360) > 352;
   const mostrarUbicacion = !evacuando && !todosLosParametros;
 
+  const iconoModo = routeProfile === 'driving-car' ? '🚗' :
+                    routeProfile === 'cycling-regular' ? '🚴' : '🚶';
+
   return (
     <View style={styles.container}>
 
-      {/* Título flotante */}
       <View style={styles.floatingTitle}>
         <Text style={styles.floatingTitleText}>Rutas de Evacuación</Text>
       </View>
 
-      {/* Botón menú — esquina superior izquierda */}
       <TouchableOpacity onPress={() => navigation.dispatch(DrawerActions.openDrawer())} style={styles.menuButton}>
         <Text style={{ fontSize: 24 }}>☰</Text>
       </TouchableOpacity>
 
-      {/* Grupo superior derecha: capas + brújula */}
       <View style={styles.topRightGroup}>
         <TouchableOpacity style={styles.squareButton} onPress={() => setShowMapTypePicker(true)}>
           <MaterialIcons name="layers" size={24} color="#073b4c" />
@@ -298,7 +374,6 @@ export default function MapViewContainer() {
         )}
       </View>
 
-      {/* Grupo inferior derecha: ubicación + evacuación — solo cuando emergencyType es ninguna */}
       {mostrarUbicacion && (
         <View style={styles.bottomRightGroup}>
           <TouchableOpacity style={[styles.roundButton, { width: 56, height: 56, borderRadius: 28 }]} onPress={handleCenterOnUser}>
@@ -312,21 +387,21 @@ export default function MapViewContainer() {
         </View>
       )}
 
-      {/* Botón llamada emergencia — esquina inferior izquierda */}
       <TouchableOpacity style={styles.emergencyButton} onPress={handleLlamarEmergencia}>
         <MaterialIcons name="phone" size={28} color="#ffffff" />
       </TouchableOpacity>
 
-      {/* Banners */}
-      {isRecalculating && (
-        <View style={styles.recalculatingBanner}>
-          <ActivityIndicator size="small" color="#ffffff" />
-          <Text style={styles.recalculatingText}>  Recalculando ruta...</Text>
+      {evacuando && routeCoords.length > 0 && (
+        <View style={styles.evacuandoBanner}>
+          <Text style={styles.evacuandoText}>🚨  Dirigiéndote al punto </Text>
         </View>
       )}
-      {evacuando && !isRecalculating && routeCoords.length > 0 && (
-        <View style={styles.evacuandoBanner}>
-          <Text style={styles.evacuandoText}>🚨  Dirigiéndote al punto seguro</Text>
+
+      {evacuando && resumenRuta && (
+        <View style={styles.resumenBanner}>
+          <Text style={styles.resumenText}>
+            {iconoModo} {resumenRuta.distancia}  ·  ⏱️ {resumenRuta.tiempo}
+          </Text>
         </View>
       )}
 
@@ -367,11 +442,43 @@ export default function MapViewContainer() {
           </>
         )}
 
-        {destinoFinal && <Marker coordinate={{ latitude: destinoFinal.lat, longitude: destinoFinal.lng }} title={destinoFinal.nombre} pinColor="green" />}
-        {startMode === 'manual' && startPoint && <Marker coordinate={{ latitude: startPoint.lat, longitude: startPoint.lng }} title="Punto inicial" pinColor="orange" />}
+        {destinoFinal && (
+          <Marker
+            coordinate={{ latitude: destinoFinal.lat, longitude: destinoFinal.lng }}
+            title={destinoFinal.nombre}
+          >
+            <Text style={{ fontSize: MARKER_SIZE + 8 }}>
+              {emojiPorDestino[destinoFinal.nombre] ?? emojiPorInstitucion[destinoFinal.nombre] ?? '🏁'}
+            </Text>
+          </Marker>
+        )}
+
+        {startMode === 'manual' && startPoint && (
+          <Marker coordinate={{ latitude: startPoint.lat, longitude: startPoint.lng }} title="Punto inicial" pinColor="orange" />
+        )}
+
+        {pois.map((poi, index) => {
+          const icon = getCategoryIcon(poi);
+          const [lng, lat] = poi.geometry.coordinates;
+          const name = poi.properties.osm_tags?.name ?? icon.label;
+          return (
+            <Marker
+              key={`poi-${index}`}
+              coordinate={{ latitude: lat, longitude: lng }}
+              title={name}
+              description={poi.properties.category_ids
+                ? Object.values(poi.properties.category_ids)[0]?.category_name
+                : ''}
+            >
+              <View style={{ backgroundColor: icon.color, borderRadius: 20, padding: 4, borderWidth: 2, borderColor: '#fff' }}>
+                <Text style={{ fontSize: 16 }}>{icon.label}</Text>
+              </View>
+            </Marker>
+          );
+        })}
+
       </MapView>
 
-      {/* Modal tipo de mapa */}
       <Modal visible={showMapTypePicker} transparent animationType="slide" onRequestClose={() => setShowMapTypePicker(false)}>
         <TouchableWithoutFeedback onPress={() => setShowMapTypePicker(false)}>
           <View style={styles.modalOverlay}>
@@ -402,30 +509,38 @@ export default function MapViewContainer() {
         </TouchableWithoutFeedback>
       </Modal>
 
-      {/* Mensaje: toca el mapa */}
       {seleccionandoPunto && startPoint === null && (
         <View style={styles.floatingBanner}>
           <Text style={styles.floatingBannerText}>Toca el mapa para seleccionar tu punto de inicio</Text>
         </View>
       )}
 
-      {/* Confirmar punto */}
       {puntoPendiente && (
-        <TouchableOpacity style={styles.confirmarPuntoButton} onPress={() => setPuntoConfirmado(true)}>
+        <TouchableOpacity
+          style={styles.confirmarPuntoButton}
+          onPress={() => {
+            setPuntoConfirmado(true);
+            setShouldScrollToDestinos(true);
+            navigation.dispatch(DrawerActions.openDrawer());
+          }}
+        >
           <MaterialIcons name="check-circle" size={20} color="#ffffff" style={{ marginRight: 8 }} />
           <Text style={styles.confirmarPuntoButtonText}>CONFIRMAR PUNTO DE INICIO</Text>
         </TouchableOpacity>
       )}
 
-      {/* Iniciar evacuación */}
       {todosLosParametros && !evacuando && (
-        <TouchableOpacity style={styles.evacuarButton} onPress={() => setShouldCalculateRoute(true)}>
-          <MaterialIcons name="directions-run" size={22} color="#ffffff" style={{ marginRight: 8 }} />
-          <Text style={styles.evacuarButtonText}>INICIAR EVACUACIÓN</Text>
-        </TouchableOpacity>
+        <Animated.View style={{ transform: [{ scale: resaltarIniciar ? pulseAnim : 1 }], position: 'absolute', bottom: 170, alignSelf: 'center' }}>
+          <TouchableOpacity
+            style={[styles.evacuarButton, resaltarIniciar && styles.evacuarButtonResaltado]}
+            onPress={() => setShouldCalculateRoute(true)}
+          >
+            <MaterialIcons name="directions-run" size={22} color="#ffffff" style={{ marginRight: 8 }} />
+            <Text style={styles.evacuarButtonText}>INICIAR EVACUACIÓN</Text>
+          </TouchableOpacity>
+        </Animated.View>
       )}
 
-      {/* Cancelar evacuación */}
       {evacuando && (
         <TouchableOpacity style={styles.cancelarButton} onPress={handleCancelarEvacuacion}>
           <Text style={styles.cancelarButtonText}>✕ CANCELAR EVACUACIÓN</Text>
@@ -436,28 +551,10 @@ export default function MapViewContainer() {
   );
 }
 
-const getDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
-  const R = 6371e3;
-  const phi1 = lat1 * Math.PI / 180, phi2 = lat2 * Math.PI / 180;
-  const dPhi = (lat2 - lat1) * Math.PI / 180, dLambda = (lon2 - lon1) * Math.PI / 180;
-  const a = Math.sin(dPhi / 2) ** 2 + Math.cos(phi1) * Math.cos(phi2) * Math.sin(dLambda / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-};
-
-const isOffRoute = (location: Location.LocationObjectCoords, routeCoords: { latitude: number; longitude: number }[]) => {
-  let min = Infinity;
-  for (const c of routeCoords) {
-    const d = getDistance(location.latitude, location.longitude, c.latitude, c.longitude);
-    if (d < min) min = d;
-  }
-  return min > 25;
-};
-
 const styles = StyleSheet.create({
   container: { flex: 1 },
   map: { flex: 1 },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f0f4f8' },
-
   floatingTitle: {
     position: 'absolute', top: 60, alignSelf: 'center', zIndex: 10,
     backgroundColor: '#ffffffdd', paddingHorizontal: 20, paddingVertical: 10,
@@ -472,7 +569,6 @@ const styles = StyleSheet.create({
   },
   topRightGroup: { position: 'absolute', top: 120, right: 20, zIndex: 10, gap: 8 },
   bottomRightGroup: { position: 'absolute', bottom: 70, right: 20, zIndex: 10, gap: 10 },
-
   squareButton: {
     backgroundColor: '#ffffffee', width: 46, height: 46, borderRadius: 10,
     alignItems: 'center', justifyContent: 'center',
@@ -483,62 +579,54 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
     shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4, elevation: 5,
   },
-
   emergencyButton: {
     position: 'absolute', bottom: 70, left: 20, zIndex: 10,
     backgroundColor: '#ef476f', width: 56, height: 56, borderRadius: 28,
     alignItems: 'center', justifyContent: 'center',
     shadowColor: '#ef476f', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 8, elevation: 8,
   },
-
-  recalculatingBanner: {
-    position: 'absolute', top: 122, left: 76, right: 76, zIndex: 10,
-    backgroundColor: '#118ab2',
-    paddingHorizontal: 16, paddingVertical: 12,
-    borderRadius: 20, flexDirection: 'row', alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 8, elevation: 8,
-  },
-  recalculatingText: { color: '#ffffff', fontWeight: '700', fontSize: 14 },
   evacuandoBanner: {
     position: 'absolute', top: 122, left: 76, right: 76, zIndex: 10,
-    backgroundColor: '#073b4c',
-    paddingHorizontal: 16, paddingVertical: 12,
+    backgroundColor: '#073b4c', paddingHorizontal: 16, paddingVertical: 12,
     borderRadius: 20, alignItems: 'center', justifyContent: 'center',
     shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 8, elevation: 8,
   },
   evacuandoText: { color: '#ffffff', fontWeight: '700', fontSize: 14 },
-
+  resumenBanner: {
+    position: 'absolute', top: 170, alignSelf: 'center', zIndex: 10,
+    backgroundColor: '#ffffffee', paddingHorizontal: 20, paddingVertical: 8,
+    borderRadius: 20, elevation: 5,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15, shadowRadius: 4,
+  },
+  resumenText: { color: '#073b4c', fontWeight: '600', fontSize: 13 },
   floatingBanner: {
     position: 'absolute', bottom: 170, alignSelf: 'center',
     backgroundColor: '#ffffffee', paddingHorizontal: 20, paddingVertical: 12,
     borderRadius: 20, elevation: 5,
   },
   floatingBannerText: { color: '#073b4c', fontWeight: '500', fontSize: 13 },
-
   confirmarPuntoButton: {
     position: 'absolute', bottom: 170, alignSelf: 'center',
     backgroundColor: '#118ab2', paddingVertical: 16, paddingHorizontal: 28,
     borderRadius: 30, flexDirection: 'row', alignItems: 'center', elevation: 8,
   },
   confirmarPuntoButtonText: { color: '#ffffff', fontWeight: 'bold', fontSize: 15 },
-
   evacuarButton: {
-    position: 'absolute', bottom: 170, alignSelf: 'center',
     backgroundColor: '#ef476f', paddingVertical: 16, paddingHorizontal: 28,
     borderRadius: 30, flexDirection: 'row', alignItems: 'center',
     elevation: 8, shadowColor: '#ef476f', shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.5, shadowRadius: 8,
   },
+  evacuarButtonResaltado: {
+    shadowOpacity: 0.9, shadowRadius: 16, elevation: 16,
+  },
   evacuarButtonText: { color: '#ffffff', fontWeight: 'bold', fontSize: 16, letterSpacing: 1 },
-
   cancelarButton: {
     position: 'absolute', bottom: 170, alignSelf: 'center',
     backgroundColor: '#073b4c', paddingVertical: 16, paddingHorizontal: 32,
     borderRadius: 30, elevation: 8,
   },
   cancelarButtonText: { color: '#ffffff', fontWeight: 'bold', fontSize: 16 },
-
   modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.4)' },
   modalSheet: { backgroundColor: '#ffffff', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, paddingBottom: 36 },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },

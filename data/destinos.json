@@ -1,23 +1,9 @@
 [
-  {
-    "id": 1,
-    "nombre": "Estación de Bomberos",
-    "tipo": "punto_encuentro",
-    "lat": 4.864046134373432,
-    "lng": -75.62118172646424
-  },
-  {
-    "id": 2,
-    "nombre": "Estación de Policía",
-    "tipo": "punto_encuentro",
-    "lat": 4.86725902956242,
-    "lng": -75.61953290701386
-  },
-  {
-    "id": 3,
-    "nombre": "Iglesia",
-    "tipo": "punto_encuentro",
-    "lat": 4.872868162699233,
-    "lng": -75.6305512153776
-  }
+  { "id": 1, "nombre": "Parque Público",            "tipo": "punto_encuentro", "lat": 4.873612911334733, "lng": -75.63040743671071 },
+  { "id": 2, "nombre": "Coliseo Bayron Gaviria",    "tipo": "punto_encuentro", "lat": 4.869272002123334, "lng": -75.62448448735194 },
+  { "id": 3, "nombre": "Zona Verde 2",              "tipo": "punto_encuentro", "lat": 4.876651343139701, "lng": -75.62545828476604 },
+  { "id": 4, "nombre": "Parque 5a Etapa La Hermosa","tipo": "punto_encuentro", "lat": 4.86932272969317,  "lng": -75.62988343146597 },
+  { "id": 5, "nombre": "Cancha Betania",            "tipo": "punto_encuentro", "lat": 4.879657920747292, "lng": -75.62417311649838 },
+  { "id": 6, "nombre": "Coliseo Timoteo",           "tipo": "punto_encuentro", "lat": 4.874355569272421, "lng": -75.63063781369424 },
+  { "id": 7, "nombre": "Zona Verde 1",              "tipo": "punto_encuentro", "lat": 4.874263896124848, "lng": -75.62910074218308 }
 ]

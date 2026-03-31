@@ -1,0 +1,11 @@
+[
+  { "id": 1, "nombre": "Hospital San Vicente",                           "tipo": "SALUD",     "lat": 4.881155, "lng": -75.618857 },
+  { "id": 2, "nombre": "CAI Betania",                                    "tipo": "SEGURIDAD", "lat": 4.883643, "lng": -75.619292 },
+  { "id": 3, "nombre": "Parroquia Ntra. Sra. de las Mercedes",           "tipo": "CULTO",     "lat": 4.879360, "lng": -75.618595 },
+  { "id": 4, "nombre": "Clínica Santa Clara",                            "tipo": "SALUD",     "lat": 4.867184, "lng": -75.616674 },
+  { "id": 5, "nombre": "Parroquia Franciscana Santísima Trinidad",       "tipo": "CULTO",     "lat": 4.873333, "lng": -75.622804 },
+  { "id": 6, "nombre": "Parroquia San Vicente de Paul",                  "tipo": "CULTO",     "lat": 4.874134, "lng": -75.617305 },
+  { "id": 7, "nombre": "Cruz Roja",                                      "tipo": "SALUD",     "lat": 4.867446, "lng": -75.611176 },
+  { "id": 8, "nombre": "Bomberos",                                       "tipo": "SEGURIDAD", "lat": 4.865231, "lng": -75.615358 },
+  { "id": 9, "nombre": "Escuela La Hermosa",                             "tipo": "EDUCACION", "lat": 4.870060, "lng": -75.621817 }
+]

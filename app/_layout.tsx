@@ -1,5 +1,6 @@
 // app/_layout.tsx
 import { Drawer } from 'expo-router/drawer';
+import InstructivoModal from '../components/InstructivoModal';
 import MainMenu from '../components/MainMenu';
 import { RouteProvider } from '../context/RouteContext';
 
@@ -14,9 +15,9 @@ export default function RootLayout() {
           headerShown: false,
         }}
       >
-        {/* Aquí solo ponemos el name de la pantalla principal */}
         <Drawer.Screen name="index" />
       </Drawer>
+      <InstructivoModal />
     </RouteProvider>
   );
 }
