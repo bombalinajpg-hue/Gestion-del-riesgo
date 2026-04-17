@@ -4,6 +4,14 @@ import { isPointInAnyPolygonOrMulti } from '../utils/geometry';
 
 const ORS_API_KEY = process.env.EXPO_PUBLIC_ORS_API_KEY ?? '';
 
+const assertOrsApiKey = (): void => {
+  if (!ORS_API_KEY) {
+    const msg = 'OpenRouteService API key no configurada. Revisa el archivo .env con EXPO_PUBLIC_ORS_API_KEY.';
+    console.error(msg);
+    throw new Error(msg);
+  }
+};
+
 const openRouteService = axios.create({
   baseURL: 'https://api.openrouteservice.org/v2/directions',
   timeout: 10000,
@@ -80,14 +88,13 @@ export const getRoute = async (
   hazardGeoJson?: GeoJSON.FeatureCollection,
   allDestinos?: Destino[]
 ): Promise<RouteResult> => {
+  assertOrsApiKey();
   try {
     const startPoint = { latitude: start[1], longitude: start[0] };
 
     const isInDangerZone =
       !!hazardGeoJson?.features?.length &&
       isPointInAnyPolygonOrMulti(startPoint, hazardGeoJson);
-
-    console.log('Usuario en zona de peligro:', isInDangerZone);
 
     const avoidPolygons = hazardGeoJson ? buildAvoidPolygons(hazardGeoJson) : null;
 
@@ -142,15 +149,12 @@ export const getRoute = async (
         );
 
         if (exitIndex === -1) {
-          console.log(`${destino.nombre}: toda la ruta dentro del peligro, descartado`);
           continue;
         }
 
         const duration = res.data.routes[0]?.summary?.duration ?? Infinity;
-        const mins = Math.round(duration / 60);
 
         const exitDistMeters = distanceAlongRoute(coords, exitIndex);
-        console.log(`${destino.nombre}: ${Math.round(exitDistMeters)}m hasta salida, duración=${mins} min`);
 
         const esMejorSalida = exitDistMeters < bestExitDist;
         const esEmpateSalida = exitDistMeters === bestExitDist && duration < bestDuration;
@@ -161,7 +165,6 @@ export const getRoute = async (
           bestDangerCoords = coords.slice(0, exitIndex + 1);
           bestExitPoint = [coords[exitIndex].longitude, coords[exitIndex].latitude];
           bestDestino = destino;
-          console.log(`Nuevo mejor destino: ${destino.nombre} (${Math.round(exitDistMeters)}m hasta salida, ${mins} min)`);
         }
       } catch (e) {
         console.warn(`Error al calcular ruta a ${destino.nombre}:`, e);
@@ -186,7 +189,6 @@ export const getRoute = async (
     // Llamada 2: desde exitPoint → destino GANADOR de la Llamada 1
     // Así ambas llamadas usan el mismo destino — sin inconsistencia
     const finalEnd: [number, number] = [bestDestino.lng, bestDestino.lat];
-    console.log(`Destino elegido: ${bestDestino.nombre} (${Math.round(bestExitDist)}m hasta salida, ${Math.round(bestDuration / 60)} min)`);
 
     const body2: OrsRequestBody = { coordinates: [bestExitPoint, finalEnd], format: 'json' };
     if (avoidPolygons) body2.options = { avoid_polygons: avoidPolygons };

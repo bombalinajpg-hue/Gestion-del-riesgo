@@ -2,6 +2,14 @@ import axios from 'axios';
 
 const ORS_API_KEY = process.env.EXPO_PUBLIC_ORS_API_KEY ?? '';
 
+const assertOrsApiKey = (): void => {
+  if (!ORS_API_KEY) {
+    const msg = 'OpenRouteService API key no configurada. Revisa el archivo .env con EXPO_PUBLIC_ORS_API_KEY.';
+    console.error(msg);
+    throw new Error(msg);
+  }
+};
+
 export type POIFeature = {
   geometry: { coordinates: [number, number] };
   properties: {
@@ -34,6 +42,7 @@ export const fetchPOIs = async (
   latitude: number,
   longitude: number
 ): Promise<POIFeature[]> => {
+  assertOrsApiKey();
   try {
     const response = await axios.post(
       'https://api.openrouteservice.org/pois',
