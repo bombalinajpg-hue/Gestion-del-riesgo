@@ -70,8 +70,7 @@ export const fetchPOIs = async (
       }
     );
     return response.data.features ?? [];
-  } catch (e: any) {
-    console.warn('Error fetching POIs:', e.response?.data ?? e.message);
+  } catch {
     return [];
   }
 };

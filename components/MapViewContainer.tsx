@@ -7,6 +7,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import polyline from '@mapbox/polyline';
 import { DrawerActions, useNavigation } from '@react-navigation/native';
 import * as Location from 'expo-location';
+import type { Feature, FeatureCollection, Geometry } from 'geojson';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator, Alert, Animated, Linking, Modal, StyleSheet, Text,
@@ -17,41 +18,32 @@ import { useRouteContext } from '../context/RouteContext';
 import avenidaTorrencialData from '../data/amenaza_avenida_torrencial.json';
 import InundacionData from '../data/amenaza_inundacion.json';
 import movimientoMasaData from '../data/amenaza_movimiento_en_masa.json';
-import destinos from '../data/destinos.json';
+import destinosRaw from '../data/destinos.json';
 import { fetchPOIs, getCategoryIcon, POIFeature } from '../src/services/poiService';
+import type { Destino, DestinoFinal, HazardFeatureProperties } from '../src/types/types';
 import { getDestinoMasCercano } from '../src/utils/getDestinoMasCercano';
 
+type HazardCollection = FeatureCollection<Geometry, HazardFeatureProperties>;
+
+const destinos = destinosRaw as Destino[];
+const avenidaTorrencial = avenidaTorrencialData as HazardCollection;
+const inundacion = InundacionData as HazardCollection;
+const movimientoMasa = movimientoMasaData as HazardCollection;
+
+type LocationError = 'denied' | 'disabled' | 'error';
+
 type LatLngTuple = [number, number];
+
+const filterByCategoria = (coll: HazardCollection, categoria: 'Baja' | 'Media' | 'Alta'): HazardCollection => ({
+  ...coll,
+  features: coll.features.filter((f) => f.properties?.Categoria === categoria),
+});
 
 const MAP_TYPES: { label: string; value: MapType; icon: string }[] = [
   { label: 'Estándar',  value: 'standard',  icon: 'map'    },
   { label: 'Satélite',  value: 'satellite', icon: 'public' },
   { label: 'Híbrido',   value: 'hybrid',    icon: 'layers' },
 ];
-
-const MARKER_SIZE = 22;
-
-const emojiPorInstitucion: Record<string, string> = {
-  'Hospital San Vicente':                        '🏥',
-  'CAI Betania':                                 '👮',
-  'Parroquia Ntra. Sra. de las Mercedes':        '⛪',
-  'Clínica Santa Clara':                         '🏥',
-  'Parroquia Franciscana Santísima Trinidad':    '⛪',
-  'Parroquia San Vicente de Paul':               '⛪',
-  'Cruz Roja':                                   '🚑',
-  'Bomberos':                                    '🚒',
-  'Escuela La Hermosa':                          '🏫',
-};
-
-const emojiPorDestino: Record<string, string> = {
-  'Parque Público':             '🌳',
-  'Coliseo Bayron Gaviria':     '🏟️',
-  'Zona Verde 2':               '🌿',
-  'Parque 5a Etapa La Hermosa': '🌳',
-  'Cancha Betania':             '⚽',
-  'Coliseo Timoteo':            '🏟️',
-  'Zona Verde 1':               '🌿',
-};
 
 function NorthArrow({ heading }: { heading: number }) {
   return (
@@ -74,12 +66,12 @@ export default function MapViewContainer() {
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
   const [location, setLocation] = useState<Location.LocationObjectCoords | null>(null);
-  const [locationDenied, setLocationDenied] = useState(false);
+  const [locationError, setLocationError] = useState<LocationError | null>(null);
   const [loading, setLoading] = useState(true);
   const [routeCoords, setRouteCoords] = useState<{ latitude: number; longitude: number }[]>([]);
   const [dangerSegment, setDangerSegment] = useState<{ latitude: number; longitude: number }[]>([]);
   const [evacuando, setEvacuando] = useState(false);
-  const [destinoFinal, setDestinoFinal] = useState<any>(null);
+  const [destinoFinal, setDestinoFinal] = useState<DestinoFinal | null>(null);
   const [alertaDangerMostrada, setAlertaDangerMostrada] = useState(false);
   const [puntoConfirmado, setPuntoConfirmado] = useState(false);
   const [mapType, setMapType] = useState<MapType>('standard');
@@ -93,7 +85,6 @@ export default function MapViewContainer() {
     selectedDestination, setSelectedDestination,
     selectedInstitucion, setSelectedInstitucion,
     routeProfile,
-    shouldCalculateRoute, setShouldCalculateRoute,
     startMode, setStartMode,
     startPoint, setStartPoint,
     destinationMode, setDestinationMode,
@@ -102,38 +93,62 @@ export default function MapViewContainer() {
     setShouldScrollToDestinos,
   } = useRouteContext();
 
-  const mmBaja     = { ...movimientoMasaData,    features: movimientoMasaData.features.filter(f    => f.properties?.Categoria === "Baja")  } as any;
-  const mmMedia    = { ...movimientoMasaData,    features: movimientoMasaData.features.filter(f    => f.properties?.Categoria === "Media") } as any;
-  const mmAlta     = { ...movimientoMasaData,    features: movimientoMasaData.features.filter(f    => f.properties?.Categoria === "Alta")  } as any;
-  const InundMedia = { ...InundacionData,        features: InundacionData.features.filter(f        => f.properties?.Categoria === "Media") } as any;
-  const InundAlta  = { ...InundacionData,        features: InundacionData.features.filter(f        => f.properties?.Categoria === "Alta")  } as any;
-  const avMedia    = { ...avenidaTorrencialData, features: avenidaTorrencialData.features.filter(f => f.properties?.Categoria === "Media") } as any;
-  const avAlta     = { ...avenidaTorrencialData, features: avenidaTorrencialData.features.filter(f => f.properties?.Categoria === "Alta")  } as any;
+  const abortRef = useRef<AbortController | null>(null);
+
+  const mmBaja     = filterByCategoria(movimientoMasa, 'Baja');
+  const mmMedia    = filterByCategoria(movimientoMasa, 'Media');
+  const mmAlta     = filterByCategoria(movimientoMasa, 'Alta');
+  const InundMedia = filterByCategoria(inundacion, 'Media');
+  const InundAlta  = filterByCategoria(inundacion, 'Alta');
+  const avMedia    = filterByCategoria(avenidaTorrencial, 'Media');
+  const avAlta     = filterByCategoria(avenidaTorrencial, 'Alta');
 
   const navigation = useNavigation();
 
   // ── Ubicación y heading ────────────────────────────────────────────────────
   useEffect(() => {
-    let locSub: Location.LocationSubscription;
-    let headSub: Location.LocationSubscription;
+    let locSub: Location.LocationSubscription | undefined;
+    let headSub: Location.LocationSubscription | undefined;
+    let cancelled = false;
+
     (async () => {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        setLocationDenied(true);
-        setLoading(false);
-        return;
+      try {
+        const enabled = await Location.hasServicesEnabledAsync();
+        if (!enabled) {
+          if (!cancelled) { setLocationError('disabled'); setLoading(false); }
+          return;
+        }
+
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') {
+          if (!cancelled) { setLocationError('denied'); setLoading(false); }
+          return;
+        }
+
+        // Fix inicial rápido para no quedar colgados si watchPositionAsync tarda.
+        try {
+          const fix = await Location.getLastKnownPositionAsync();
+          if (fix && !cancelled) { setLocation(fix.coords); setLoading(false); }
+        } catch {
+          // si falla, seguimos al watch
+        }
+
+        locSub = await Location.watchPositionAsync(
+          { accuracy: Location.Accuracy.High, distanceInterval: 3 },
+          (loc) => { if (!cancelled) { setLocation(loc.coords); setLoading(false); } }
+        );
+        headSub = await Location.watchHeadingAsync((h) => {
+          if (!cancelled) setHeading(h.trueHeading ?? h.magHeading ?? 0);
+        });
+      } catch {
+        if (!cancelled) { setLocationError('error'); setLoading(false); }
       }
-      locSub = await Location.watchPositionAsync(
-        { accuracy: Location.Accuracy.High, distanceInterval: 3 },
-        (loc) => { setLocation(loc.coords); setLoading(false); }
-      );
-      headSub = await Location.watchHeadingAsync((h) => {
-        setHeading(h.trueHeading ?? h.magHeading ?? 0);
-      });
     })();
+
     return () => {
-      if (locSub) locSub.remove();
-      if (headSub) headSub.remove();
+      cancelled = true;
+      locSub?.remove();
+      headSub?.remove();
     };
   }, []);
 
@@ -179,34 +194,35 @@ export default function MapViewContainer() {
 
   // ── Cargar POIs ────────────────────────────────────────────────────────────
   useEffect(() => {
-    fetchPOIs(4.8767129, -75.6272130).then((result) => {
-      console.log('POIs recibidos:', result.length);
-      setPois(result);
-    });
+    fetchPOIs(4.8767129, -75.6272130).then(setPois);
   }, []);
 
   // ── Calcular ruta ──────────────────────────────────────────────────────────
-  useEffect(() => {
-    if (!shouldCalculateRoute || !location) return;
+  const iniciarEvacuacion = async () => {
+    if (!location || evacuando) return;
+
+    // Cancelar cualquier cálculo previo en vuelo
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     setEvacuando(true);
 
-    let finalDestination: any = selectedInstitucion ?? selectedDestination;
+    let finalDestination: DestinoFinal | null = selectedInstitucion ?? selectedDestination;
 
     if (destinationMode === 'closest') {
       const userLocation = startMode === 'manual' && startPoint
         ? { latitude: startPoint.lat, longitude: startPoint.lng }
         : { latitude: location.latitude, longitude: location.longitude };
-      finalDestination = getDestinoMasCercano(userLocation, destinos.filter(d => d.tipo === 'punto_encuentro'));
-      if (!finalDestination) {
-        setShouldCalculateRoute(false); setEvacuando(false); return;
-      }
+      finalDestination = getDestinoMasCercano(userLocation, destinos.filter((d) => d.tipo === 'punto_encuentro'));
     }
 
-    // destinoFinal se actualiza después con el resultado real de getRoute
-    setDestinoFinal(finalDestination);
     if (!finalDestination) {
-      setShouldCalculateRoute(false); setEvacuando(false); return;
+      setEvacuando(false);
+      return;
     }
+
+    setDestinoFinal(finalDestination);
 
     const start: [number, number] = startMode === 'manual' && startPoint
       ? [startPoint.lng, startPoint.lat]
@@ -214,67 +230,74 @@ export default function MapViewContainer() {
 
     const end: [number, number] = [finalDestination.lng, finalDestination.lat];
 
-    const hazardGeoJson: GeoJSON.FeatureCollection | undefined = emergencyType === 'ninguna' ? undefined : {
+    const hazardSource: HazardCollection | undefined =
+      emergencyType === 'inundacion' ? inundacion :
+      emergencyType === 'movimiento_en_masa' ? movimientoMasa :
+      emergencyType === 'avenida_torrencial' ? avenidaTorrencial :
+      undefined;
+
+    const hazardGeoJson: FeatureCollection | undefined = hazardSource && {
       type: 'FeatureCollection',
-      features: (
-        emergencyType === 'inundacion' ? InundacionData.features :
-        emergencyType === 'movimiento_en_masa' ? movimientoMasaData.features :
-        avenidaTorrencialData.features
-      ).filter((f: any) => f.properties?.Categoria === 'Media' || f.properties?.Categoria === 'Alta') as GeoJSON.Feature[],
+      features: hazardSource.features.filter(
+        (f): f is Feature<Geometry, HazardFeatureProperties> =>
+          f.properties?.Categoria === 'Media' || f.properties?.Categoria === 'Alta'
+      ),
     };
 
     const destinosParaEvaluar = destinationMode === 'closest'
-      ? destinos.filter(d => d.tipo === 'punto_encuentro')
-      : [finalDestination];
+      ? destinos.filter((d) => d.tipo === 'punto_encuentro')
+      : [finalDestination as Destino];
 
     const profile = routeProfile ?? 'foot-walking';
 
-    getRoute(start, end, profile, hazardGeoJson, destinosParaEvaluar)
-      .then(({ data: route, isInDangerZone, dangerCoords, destinoFinalCoord }) => {
+    try {
+      const { data: route, isInDangerZone, dangerCoords, destinoFinalCoord, exitPoint } =
+        await getRoute(start, end, profile, hazardGeoJson, destinosParaEvaluar);
 
-        if (isInDangerZone && dangerCoords.length > 0 && !alertaDangerMostrada) {
-          setAlertaDangerMostrada(true);
-          Alert.alert(
-            '⚠️ Estás en zona de riesgo',
-            'Se calculó una ruta de salida. Sigue las instrucciones y aléjate del área peligrosa.',
-            [{ text: 'Entendido' }]
-          );
-        }
+      if (controller.signal.aborted) return;
 
-        // Si getRoute encontró un destino más óptimo, actualizar el marcador
-        if (destinoFinalCoord) {
-          setDestinoFinal(destinoFinalCoord);
-        }
+      if (isInDangerZone && dangerCoords.length > 0 && !alertaDangerMostrada) {
+        setAlertaDangerMostrada(true);
+        Alert.alert(
+          '⚠️ Estás en zona de riesgo',
+          'Se calculó una ruta de salida. Sigue las instrucciones y aléjate del área peligrosa.',
+          [{ text: 'Entendido' }]
+        );
+      }
 
-        const enc = route.routes[0]?.geometry;
-        if (!enc) throw new Error('No geometry');
+      if (destinoFinalCoord) setDestinoFinal(destinoFinalCoord);
 
-        // Calcular resumen de distancia y tiempo
-        const summary = route.routes[0]?.summary;
-        if (summary) {
-          const distKm = summary.distance >= 1000
-            ? `${(summary.distance / 1000).toFixed(1)} km`
-            : `${Math.round(summary.distance)} m`;
-          const mins = Math.round(summary.duration / 60);
-          const tiempo = mins < 60
-            ? `${mins} min`
-            : `${Math.floor(mins / 60)}h ${mins % 60}min`;
-          setResumenRuta({ distancia: distKm, tiempo });
-        }
+      const enc = route.routes[0]?.geometry;
+      if (!enc) throw new Error('No geometry');
 
-        const decodedCoords = (polyline.decode(enc) as LatLngTuple[])
-          .map(([lat, lng]) => ({ latitude: lat, longitude: lng }));
+      const summary = route.routes[0]?.summary;
+      if (summary && summary.distance != null && summary.duration != null) {
+        const distKm = summary.distance >= 1000
+          ? `${(summary.distance / 1000).toFixed(1)} km`
+          : `${Math.round(summary.distance)} m`;
+        const mins = Math.round(summary.duration / 60);
+        const tiempo = mins < 60
+          ? `${mins} min`
+          : `${Math.floor(mins / 60)}h ${mins % 60}min`;
+        setResumenRuta({ distancia: distKm, tiempo });
+      }
 
-        setDangerSegment(dangerCoords);
-        setRouteCoords(decodedCoords);
-      })
-      .catch((err) => {
-        console.error(err);
-        Alert.alert('Error', 'No se pudo calcular la ruta.');
-        setEvacuando(false);
-      })
-      .finally(() => { setShouldCalculateRoute(false); });
-  }, [shouldCalculateRoute]);
+      const decodedCoords = (polyline.decode(enc) as LatLngTuple[])
+        .map(([lat, lng]) => ({ latitude: lat, longitude: lng }));
+
+      // Prepend el cruce exacto con el borde del polígono — va sobre el mismo
+      // tramo de vía que el primer punto del azul, así rojo y azul empalman
+      // sobre la calle sin hueco ni atajo.
+      const blueCoords = exitPoint ? [exitPoint, ...decodedCoords] : decodedCoords;
+
+      setDangerSegment(dangerCoords);
+      setRouteCoords(blueCoords);
+    } catch {
+      if (controller.signal.aborted) return;
+      Alert.alert('Error', 'No se pudo calcular la ruta.');
+      setEvacuando(false);
+    }
+  };
 
   const handleCenterOnUser = () => {
     if (!location) return;
@@ -285,7 +308,7 @@ export default function MapViewContainer() {
   };
 
   const handleCancelarEvacuacion = () => {
-    setShouldCalculateRoute(false);
+    abortRef.current?.abort();
     setEvacuando(false);
     setRouteCoords([]);
     setDangerSegment([]);
@@ -314,15 +337,21 @@ export default function MapViewContainer() {
   };
 
   // ── Pantallas de estado ────────────────────────────────────────────────────
-  if (locationDenied)
+  if (locationError) {
+    const mensajes: Record<LocationError, { titulo: string; detalle: string }> = {
+      denied:   { titulo: 'Permiso de ubicación denegado',   detalle: 'Esta app necesita acceso a tu ubicación para calcular rutas de evacuación.' },
+      disabled: { titulo: 'Servicios de ubicación desactivados', detalle: 'Activa el GPS en la configuración del sistema para calcular rutas.' },
+      error:    { titulo: 'No se pudo obtener tu ubicación', detalle: 'Ocurrió un error al acceder al GPS. Intenta reiniciar la app o revisa los permisos.' },
+    };
+    const { titulo, detalle } = mensajes[locationError];
     return (
       <View style={styles.loadingContainer}>
         <MaterialIcons name="location-off" size={48} color="#ef476f" />
         <Text style={{ marginTop: 16, color: '#073b4c', fontWeight: '700', fontSize: 16 }}>
-          Permiso de ubicación denegado
+          {titulo}
         </Text>
         <Text style={{ marginTop: 8, color: '#555', fontSize: 13, textAlign: 'center', paddingHorizontal: 32 }}>
-          Esta app necesita acceso a tu ubicación para calcular rutas de evacuación.
+          {detalle}
         </Text>
         <TouchableOpacity
           style={{ marginTop: 20, backgroundColor: '#118ab2', paddingVertical: 12, paddingHorizontal: 24, borderRadius: 20 }}
@@ -332,6 +361,7 @@ export default function MapViewContainer() {
         </TouchableOpacity>
       </View>
     );
+  }
 
   if (loading || !location)
     return (
@@ -446,11 +476,8 @@ export default function MapViewContainer() {
           <Marker
             coordinate={{ latitude: destinoFinal.lat, longitude: destinoFinal.lng }}
             title={destinoFinal.nombre}
-          >
-            <Text style={{ fontSize: MARKER_SIZE + 8 }}>
-              {emojiPorDestino[destinoFinal.nombre] ?? emojiPorInstitucion[destinoFinal.nombre] ?? '🏁'}
-            </Text>
-          </Marker>
+            pinColor="azure"
+          />
         )}
 
         {startMode === 'manual' && startPoint && (
@@ -533,7 +560,8 @@ export default function MapViewContainer() {
         <Animated.View style={{ transform: [{ scale: resaltarIniciar ? pulseAnim : 1 }], position: 'absolute', bottom: 170, alignSelf: 'center' }}>
           <TouchableOpacity
             style={[styles.evacuarButton, resaltarIniciar && styles.evacuarButtonResaltado]}
-            onPress={() => setShouldCalculateRoute(true)}
+            onPress={iniciarEvacuacion}
+            disabled={evacuando}
           >
             <MaterialIcons name="directions-run" size={22} color="#ffffff" style={{ marginRight: 8 }} />
             <Text style={styles.evacuarButtonText}>INICIAR EVACUACIÓN</Text>
@@ -586,19 +614,19 @@ const styles = StyleSheet.create({
     shadowColor: '#ef476f', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 8, elevation: 8,
   },
   evacuandoBanner: {
-    position: 'absolute', top: 122, left: 76, right: 76, zIndex: 10,
-    backgroundColor: '#073b4c', paddingHorizontal: 16, paddingVertical: 12,
+    position: 'absolute', top: 176, alignSelf: 'center', zIndex: 10,
+    backgroundColor: '#073b4c', paddingHorizontal: 16, paddingVertical: 10,
     borderRadius: 20, alignItems: 'center', justifyContent: 'center',
     shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 8, elevation: 8,
   },
-  evacuandoText: { color: '#ffffff', fontWeight: '700', fontSize: 14 },
+  evacuandoText: { color: '#ffffff', fontWeight: '700', fontSize: 14, includeFontPadding: false },
   resumenBanner: {
-    position: 'absolute', top: 170, alignSelf: 'center', zIndex: 10,
+    position: 'absolute', top: 224, alignSelf: 'center', zIndex: 10,
     backgroundColor: '#ffffffee', paddingHorizontal: 20, paddingVertical: 8,
     borderRadius: 20, elevation: 5,
     shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15, shadowRadius: 4,
   },
-  resumenText: { color: '#073b4c', fontWeight: '600', fontSize: 13 },
+  resumenText: { color: '#073b4c', fontWeight: '600', fontSize: 13, includeFontPadding: false },
   floatingBanner: {
     position: 'absolute', bottom: 170, alignSelf: 'center',
     backgroundColor: '#ffffffee', paddingHorizontal: 20, paddingVertical: 12,

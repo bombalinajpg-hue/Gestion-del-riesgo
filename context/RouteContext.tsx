@@ -32,8 +32,6 @@ interface RouteContextType {
   setStartMode: React.Dispatch<React.SetStateAction<StartMode>>;
   startPoint: StartPoint | null;
   setStartPoint: React.Dispatch<React.SetStateAction<StartPoint | null>>;
-  shouldCalculateRoute: boolean;
-  setShouldCalculateRoute: React.Dispatch<React.SetStateAction<boolean>>;
   selectedDestination: Destination | null;
   setSelectedDestination: React.Dispatch<React.SetStateAction<Destination | null>>;
   selectedInstitucion: Institucion | null;
@@ -59,7 +57,6 @@ export const RouteProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // ✅ FIX 6 y 7: inician en null → sin preselección
   const [routeProfile, setRouteProfile] = useState<RouteProfile>('foot-walking');
   const [startMode, setStartMode] = useState<StartMode>('gps');
-  const [shouldCalculateRoute, setShouldCalculateRoute] = useState(false);
   const [selectedDestination, setSelectedDestination] = useState<Destination | null>(null);
   const [selectedInstitucion, setSelectedInstitucion] = useState<Institucion | null>(null);
   const [emergencyType, setEmergencyType] = useState<EmergencyType>('ninguna');
@@ -96,7 +93,6 @@ export const RouteProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         routeProfile, setRouteProfile,
         startMode, setStartMode,
         startPoint, setStartPoint,
-        shouldCalculateRoute, setShouldCalculateRoute,
         selectedDestination, setSelectedDestination,
         selectedInstitucion, setSelectedInstitucion,
         emergencyType, setEmergencyType,

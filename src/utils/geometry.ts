@@ -81,6 +81,31 @@ export function isPointInAnyPolygon(
 }
 
 /**
+ * Dado un segmento con un extremo dentro y otro fuera de los polígonos,
+ * devuelve el punto aproximado de cruce sobre el borde (búsqueda binaria).
+ * El resultado queda sobre el segmento — por lo tanto, sobre el mismo tramo
+ * de vía del polyline.
+ */
+export function findPolygonExitPoint(
+  inside: Point,
+  outside: Point,
+  geoJson: GeoJSON.FeatureCollection,
+  iterations = 18
+): Point {
+  let lo = inside;
+  let hi = outside;
+  for (let i = 0; i < iterations; i++) {
+    const mid: Point = {
+      latitude:  (lo.latitude  + hi.latitude)  / 2,
+      longitude: (lo.longitude + hi.longitude) / 2,
+    };
+    if (isPointInAnyPolygonOrMulti(mid, geoJson)) lo = mid;
+    else hi = mid;
+  }
+  return hi;
+}
+
+/**
  * Verifica si un punto está dentro de algún polígono de una colección
  * Soporta tanto Polygon como MultiPolygon
  */

@@ -31,6 +31,31 @@ const iconoPorInstitucion: Record<string, string> = {
   'Escuela La Hermosa':                          '🏫',
 };
 
+const EMERGENCY_OPTIONS: { label: string; value: EmergencyType; emoji: string }[] = [
+  { label: 'Ninguna',            value: 'ninguna',            emoji: '—'  },
+  { label: 'Inundación',         value: 'inundacion',         emoji: '🌊' },
+  { label: 'Movimiento en masa', value: 'movimiento_en_masa', emoji: '⛰️' },
+  { label: 'Avenida torrencial', value: 'avenida_torrencial', emoji: '🌪️' },
+];
+
+type LeyendaItem = { nivel: 'Baja' | 'Media' | 'Alta'; color: string };
+
+const LEYENDAS: Record<Exclude<EmergencyType, 'ninguna'>, LeyendaItem[]> = {
+  inundacion: [
+    { nivel: 'Media', color: 'rgba(30,144,255,0.4)' },
+    { nivel: 'Alta',  color: 'rgba(0,0,205,0.5)' },
+  ],
+  movimiento_en_masa: [
+    { nivel: 'Baja',  color: 'rgba(255,215,0,0.6)' },
+    { nivel: 'Media', color: 'rgba(255,140,0,0.6)' },
+    { nivel: 'Alta',  color: 'rgba(139,0,0,0.7)' },
+  ],
+  avenida_torrencial: [
+    { nivel: 'Media', color: 'rgba(255,100,0,0.5)' },
+    { nivel: 'Alta',  color: 'rgba(180,0,0,0.6)' },
+  ],
+};
+
 export default function MainMenu({ navigation }: DrawerContentComponentProps) {
   const insets = useSafeAreaInsets();
   const scrollRef = useRef<ScrollView>(null);
@@ -105,73 +130,39 @@ export default function MainMenu({ navigation }: DrawerContentComponentProps) {
         {/* Tipo de Emergencia */}
         <Text style={styles.label}>Tipo de Emergencia</Text>
         <View style={styles.emergencyGroup}>
-          {[
-            { label: 'Ninguna',            value: 'ninguna',            emoji: '—'  },
-            { label: 'Inundación',         value: 'inundacion',         emoji: '🌊' },
-            { label: 'Movimiento en masa', value: 'movimiento_en_masa', emoji: '⛰️' },
-            { label: 'Avenida torrencial', value: 'avenida_torrencial', emoji: '🌪️' },
-          ].map((option) => (
-            <TouchableOpacity
-              key={option.value}
-              style={[styles.emergencyButton, emergencyType === option.value && styles.optionButtonActive]}
-              onPress={() => setEmergencyType(option.value as EmergencyType)}
-            >
-              <Text style={[styles.emergencyText, emergencyType === option.value && styles.optionTextActive]}>
-                {option.emoji} {option.label}
-              </Text>
-            </TouchableOpacity>
-          ))}
+          {EMERGENCY_OPTIONS.map((option) => {
+            const isActive = emergencyType === option.value;
+            return (
+              <View key={option.value}>
+                <TouchableOpacity
+                  style={[styles.emergencyButton, isActive && styles.optionButtonActive]}
+                  onPress={() => setEmergencyType(option.value)}
+                >
+                  <Text style={[styles.emergencyText, isActive && styles.optionTextActive]}>
+                    {option.emoji} {option.label}
+                  </Text>
+                </TouchableOpacity>
+
+                {isActive && option.value !== 'ninguna' && (
+                  <View style={styles.leyendaBox}>
+                    <Text style={styles.leyendaTitle}>Leyenda</Text>
+                    {LEYENDAS[option.value].map((item) => (
+                      <View key={item.nivel} style={styles.leyendaRow}>
+                        <View style={[styles.leyendaColor, { backgroundColor: item.color }]} />
+                        <Text style={styles.leyendaText}>
+                          Amenaza {item.nivel}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
+              </View>
+            );
+          })}
         </View>
 
         {emergencyType === 'ninguna' && (
           <Text style={styles.inlineHint}>Selecciona el tipo de emergencia para continuar</Text>
-        )}
-
-        {/* Leyenda */}
-        {emergencyType !== 'ninguna' && (
-          <View style={styles.leyendaBox}>
-            <Text style={styles.leyendaTitle}>Leyenda</Text>
-            {emergencyType === 'inundacion' && (
-              <>
-                <View style={styles.leyendaRow}>
-                  <View style={[styles.leyendaColor, { backgroundColor: 'rgba(30,144,255,0.4)' }]} />
-                  <Text style={styles.leyendaText}>Amenaza Media</Text>
-                </View>
-                <View style={styles.leyendaRow}>
-                  <View style={[styles.leyendaColor, { backgroundColor: 'rgba(0,0,205,0.5)' }]} />
-                  <Text style={styles.leyendaText}>Amenaza Alta</Text>
-                </View>
-              </>
-            )}
-            {emergencyType === 'movimiento_en_masa' && (
-              <>
-                <View style={styles.leyendaRow}>
-                  <View style={[styles.leyendaColor, { backgroundColor: 'rgba(255,215,0,0.6)' }]} />
-                  <Text style={styles.leyendaText}>Amenaza Baja</Text>
-                </View>
-                <View style={styles.leyendaRow}>
-                  <View style={[styles.leyendaColor, { backgroundColor: 'rgba(255,140,0,0.6)' }]} />
-                  <Text style={styles.leyendaText}>Amenaza Media</Text>
-                </View>
-                <View style={styles.leyendaRow}>
-                  <View style={[styles.leyendaColor, { backgroundColor: 'rgba(139,0,0,0.7)' }]} />
-                  <Text style={styles.leyendaText}>Amenaza Alta</Text>
-                </View>
-              </>
-            )}
-            {emergencyType === 'avenida_torrencial' && (
-              <>
-                <View style={styles.leyendaRow}>
-                  <View style={[styles.leyendaColor, { backgroundColor: 'rgba(255,100,0,0.5)' }]} />
-                  <Text style={styles.leyendaText}>Amenaza Media</Text>
-                </View>
-                <View style={styles.leyendaRow}>
-                  <View style={[styles.leyendaColor, { backgroundColor: 'rgba(180,0,0,0.6)' }]} />
-                  <Text style={styles.leyendaText}>Amenaza Alta</Text>
-                </View>
-              </>
-            )}
-          </View>
         )}
 
         {/* Modo de Desplazamiento */}
@@ -400,7 +391,7 @@ const styles = StyleSheet.create({
   leyendaTitle: { fontWeight: '700', color: '#073b4c', fontSize: 12, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 },
   leyendaRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 4 },
   leyendaColor: { width: 16, height: 16, borderRadius: 3, marginRight: 8, borderWidth: 1, borderColor: '#ccc' },
-  leyendaText: { fontSize: 12, color: '#333' },
+  leyendaText: { fontSize: 12, color: '#333', flex: 1 },
   destinoCard: {
     padding: 12, borderRadius: 12, backgroundColor: '#f7f7f7',
     marginBottom: 8, borderLeftWidth: 4, borderLeftColor: '#06d6a0', elevation: 2,

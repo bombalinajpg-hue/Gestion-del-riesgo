@@ -213,16 +213,21 @@ export default function InstructivoModal() {
               disabled={esPrimero}
             >
               <MaterialIcons name="arrow-back" size={18} color={esPrimero ? '#ccc' : '#073b4c'} />
-              <Text style={[styles.navBtnText, esPrimero && styles.navBtnTextDisabled]}>Anterior</Text>
+              <Text
+                style={[styles.navBtnText, esPrimero && styles.navBtnTextDisabled]}
+                numberOfLines={1}
+              >
+                Anterior
+              </Text>
             </TouchableOpacity>
-
-            <Text style={styles.counter}>{paso + 1}/{PASOS.length}</Text>
 
             <TouchableOpacity
               style={[styles.navBtnPrimary, esUltimo && styles.navBtnFin]}
               onPress={handleSiguiente}
             >
-              <Text style={styles.navBtnPrimaryText}>{esUltimo ? '¡Comenzar!' : 'Siguiente'}</Text>
+              <Text style={styles.navBtnPrimaryText} numberOfLines={1}>
+                {esUltimo ? '¡Comenzar!' : 'Siguiente'}
+              </Text>
               <MaterialIcons name={esUltimo ? 'check' : 'arrow-forward'} size={18} color="#ffffff" />
             </TouchableOpacity>
           </View>
@@ -236,11 +241,13 @@ export default function InstructivoModal() {
               <View style={[styles.checkbox, noMostrarMas && styles.checkboxActive]}>
                 {noMostrarMas && <MaterialIcons name="check" size={14} color="#ffffff" />}
               </View>
-              <Text style={styles.checkLabel}>No mostrar más al abrir</Text>
+              <Text style={styles.checkLabel} numberOfLines={1}>
+                No volver a mostrar
+              </Text>
             </TouchableOpacity>
 
             {!esUltimo && (
-              <TouchableOpacity onPress={handleCerrar}>
+              <TouchableOpacity onPress={handleCerrar} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                 <Text style={styles.skipText}>Saltar</Text>
               </TouchableOpacity>
             )}
@@ -332,7 +339,6 @@ const styles = StyleSheet.create({
   },
   navBtnFin: { backgroundColor: '#06d6a0' },
   navBtnPrimaryText: { fontSize: 13, color: '#ffffff', fontWeight: '700' },
-  counter: { fontSize: 12, color: '#999' },
   footerRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -341,7 +347,7 @@ const styles = StyleSheet.create({
     paddingBottom: 16,
     paddingTop: 4,
   },
-  checkRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  checkRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1, marginRight: 12 },
   checkbox: {
     width: 20, height: 20, borderRadius: 4,
     borderWidth: 2, borderColor: '#118ab2',

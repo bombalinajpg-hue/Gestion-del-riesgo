@@ -1,6 +1,6 @@
 import polyline from '@mapbox/polyline';
 import axios from 'axios';
-import { isPointInAnyPolygonOrMulti } from '../utils/geometry';
+import { findPolygonExitPoint, isPointInAnyPolygonOrMulti } from '../utils/geometry';
 
 const ORS_API_KEY = process.env.EXPO_PUBLIC_ORS_API_KEY ?? '';
 
@@ -22,8 +22,18 @@ const openRouteService = axios.create({
   },
 });
 
+export interface OrsRoute {
+  geometry: string;
+  summary?: { distance?: number; duration?: number };
+  segments?: unknown[];
+}
+
+export interface OrsResponse {
+  routes: OrsRoute[];
+}
+
 export interface RouteResult {
-  data: any;
+  data: OrsResponse;
   isInDangerZone: boolean;
   usedAvoidance: boolean;
   exitPoint: { latitude: number; longitude: number } | null;
@@ -32,6 +42,14 @@ export interface RouteResult {
   // cuando el modo es 'closest' y la Llamada 1 encontró un destino más óptimo
   destinoFinalCoord: { lat: number; lng: number; nombre: string } | null;
 }
+
+const assertValidRouteResponse = (data: unknown): OrsResponse => {
+  const res = data as Partial<OrsResponse> | null;
+  if (!res || !Array.isArray(res.routes) || res.routes.length === 0 || !res.routes[0]?.geometry) {
+    throw new Error('Respuesta de ORS inválida: no se recibió una ruta válida.');
+  }
+  return res as OrsResponse;
+};
 
 const RETRYABLE_ORS_STATUSES = [400, 413];
 
@@ -104,7 +122,7 @@ export const getRoute = async (
       if (avoidPolygons) body.options = { avoid_polygons: avoidPolygons };
       const response = await openRouteService.post(`/${profile}`, body);
       return {
-        data: response.data,
+        data: assertValidRouteResponse(response.data),
         isInDangerZone: false,
         usedAvoidance: !!avoidPolygons,
         exitPoint: null,
@@ -127,6 +145,7 @@ export const getRoute = async (
     let bestExitDist = Infinity;
     let bestDuration = Infinity;
     let bestExitPoint: [number, number] | null = null;
+    let bestExactExit: Coord | null = null;
     let bestDangerCoords: Coord[] = [];
     let bestDestino: Destino | null = null;
 
@@ -138,8 +157,8 @@ export const getRoute = async (
           format: 'json',
         });
 
-        const enc = res.data.routes[0]?.geometry;
-        if (!enc) continue;
+        const validated = assertValidRouteResponse(res.data);
+        const enc = validated.routes[0].geometry;
 
         const coords = (polyline.decode(enc) as [number, number][])
           .map(([lat, lng]) => ({ latitude: lat, longitude: lng }));
@@ -152,7 +171,7 @@ export const getRoute = async (
           continue;
         }
 
-        const duration = res.data.routes[0]?.summary?.duration ?? Infinity;
+        const duration = validated.routes[0].summary?.duration ?? Infinity;
 
         const exitDistMeters = distanceAlongRoute(coords, exitIndex);
 
@@ -160,24 +179,32 @@ export const getRoute = async (
         const esEmpateSalida = exitDistMeters === bestExitDist && duration < bestDuration;
 
         if (esMejorSalida || esEmpateSalida) {
+          // Punto exacto de cruce con el borde del polígono, sobre el mismo
+          // tramo de vía [exitIndex-1, exitIndex]. Solo se usa para render visual
+          // — NO se envía a ORS (si se enviara, ORS lo snapearía a otro nodo).
+          const exactExit = exitIndex > 0
+            ? findPolygonExitPoint(coords[exitIndex - 1], coords[exitIndex], hazardGeoJson)
+            : coords[exitIndex];
+
           bestExitDist = exitDistMeters;
           bestDuration = duration;
-          bestDangerCoords = coords.slice(0, exitIndex + 1);
+          bestDangerCoords = [...coords.slice(0, exitIndex), exactExit];
+          // Para la Llamada 2 seguimos usando el punto de ORS (garantizado en grafo de vías).
           bestExitPoint = [coords[exitIndex].longitude, coords[exitIndex].latitude];
+          bestExactExit = exactExit;
           bestDestino = destino;
         }
-      } catch (e) {
-        console.warn(`Error al calcular ruta a ${destino.nombre}:`, e);
+      } catch {
+        // Un destino con error no debe abortar la búsqueda; se intentan los demás.
       }
     }
 
     // Si ningún destino tiene salida viable → ruta directa sin tramo rojo
     if (bestExitDist === Infinity || !bestExitPoint || !bestDestino) {
-      console.warn('Ningún destino tiene salida viable, calculando ruta directa');
       const body: OrsRequestBody = { coordinates: [start, end], format: 'json' };
       const response = await openRouteService.post(`/${profile}`, body);
       return {
-        data: response.data,
+        data: assertValidRouteResponse(response.data),
         isInDangerZone: true,
         usedAvoidance: false,
         exitPoint: null,
@@ -200,7 +227,6 @@ export const getRoute = async (
     } catch (firstError: any) {
       const status = firstError.response?.status;
       if (avoidPolygons && RETRYABLE_ORS_STATUSES.includes(status)) {
-        console.warn('ORS rechazó avoid_polygons en tramo azul, reintentando sin ellos');
         safeResponse = await openRouteService.post(`/${profile}`, {
           coordinates: [bestExitPoint, finalEnd],
           format: 'json',
@@ -213,22 +239,18 @@ export const getRoute = async (
       }
     }
 
-    const exitCoord = {
-      latitude: (bestExitPoint as [number, number])[1],
-      longitude: (bestExitPoint as [number, number])[0],
-    };
-
     return {
-      data: safeResponse.data,
+      data: assertValidRouteResponse(safeResponse.data),
       isInDangerZone: true,
       usedAvoidance,
-      exitPoint: exitCoord,
+      // exitPoint expone el cruce exacto con el borde del polígono (punto de
+      // display, sobre la vía) para que el render del azul empalme sin hueco.
+      exitPoint: bestExactExit,
       dangerCoords: bestDangerCoords,
       destinoFinalCoord: { lat: bestDestino.lat, lng: bestDestino.lng, nombre: bestDestino.nombre },
     };
 
-  } catch (error: any) {
-    console.error('Error al obtener la ruta:', error.response?.data || error);
+  } catch (error) {
     throw error;
   }
 };
