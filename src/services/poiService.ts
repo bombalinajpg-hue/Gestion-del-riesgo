@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const ORS_API_KEY = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjQwOTUyNDJiZjFhYzQzMzc5ZmE0MDMxMGU5NmRmNjY1IiwiaCI6Im11cm11cjY0In0=';
+const ORS_API_KEY = process.env.EXPO_PUBLIC_ORS_API_KEY ?? '';
 
 export type POIFeature = {
   geometry: { coordinates: [number, number] };

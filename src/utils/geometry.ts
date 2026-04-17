@@ -31,7 +31,7 @@ export function routeIntersectsBlocked(
     const p1 = route[i];
     const p2 = route[i + 1];
     for (const feature of blocked.features) {
-      if (feature.geometry.type !== 'Polygon') continue;
+      if (!feature.geometry || feature.geometry.type !== 'Polygon') continue;
       const ring = feature.geometry.coordinates[0];
       for (let j = 0; j < ring.length - 1; j++) {
         const q1 = { latitude: ring[j][1], longitude: ring[j][0] };
@@ -74,6 +74,7 @@ export function isPointInAnyPolygon(
 ): boolean {
   return geoJson.features.some(
     (f) =>
+      f.geometry !== null &&
       f.geometry.type === 'Polygon' &&
       isPointInPolygon(point, f.geometry.coordinates)
   );
@@ -88,6 +89,7 @@ export function isPointInAnyPolygonOrMulti(
   geoJson: GeoJSON.FeatureCollection
 ): boolean {
   return geoJson.features.some((f) => {
+    if (!f.geometry) return false;
     if (f.geometry.type === 'Polygon') {
       return isPointInPolygon(point, f.geometry.coordinates);
     }
@@ -100,89 +102,3 @@ export function isPointInAnyPolygonOrMulti(
   });
 }
 
-/**
- * Encuentra el punto más cercano en el borde exterior de la zona de amenaza.
- * Solo considera puntos de salida que, al cruzarlos, lleven a un punto
- * completamente fuera de TODOS los polígonos del GeoJSON.
- * Esto evita que el punto de salida sea un borde interno entre zonas Media y Alta.
- */
-export function findNearestExitPoint(
-  point: Point,
-  geoJson: GeoJSON.FeatureCollection
-): Point | null {
-  let nearestPoint: Point | null = null;
-  let minDistance = Infinity;
-
-  // Pequeño offset para verificar si el candidato lleva afuera de todos los polígonos
-  const OFFSET = 0.00002;
-
-  const isOutsideAll = (candidate: Point, fromPoint: Point): boolean => {
-    // Calcular dirección desde el punto original hacia el candidato
-    const dx = candidate.longitude - fromPoint.longitude;
-    const dy = candidate.latitude - fromPoint.latitude;
-    const len = Math.sqrt(dx * dx + dy * dy);
-    if (len === 0) return false;
-
-    // Punto ligeramente más allá del borde
-    const outside: Point = {
-      latitude: candidate.latitude + (dy / len) * OFFSET,
-      longitude: candidate.longitude + (dx / len) * OFFSET,
-    };
-
-    // Verificar que ese punto esté fuera de todos los polígonos
-    return !isPointInAnyPolygonOrMulti(outside, geoJson);
-  };
-
-  const checkRing = (ring: number[][], containingFeature: boolean) => {
-    if (!containingFeature) return;
-    for (let i = 0; i < ring.length - 1; i++) {
-      const a = { latitude: ring[i][1], longitude: ring[i][0] };
-      const b = { latitude: ring[i + 1][1], longitude: ring[i + 1][0] };
-      const candidate = nearestPointOnSegment(point, a, b);
-
-      // Solo considerar si cruzar este borde lleva afuera de todos los polígonos
-      if (!isOutsideAll(candidate, point)) continue;
-
-      const dist = euclideanDistance(point, candidate);
-      if (dist < minDistance) {
-        minDistance = dist;
-        nearestPoint = candidate;
-      }
-    }
-  };
-
-  for (const f of geoJson.features) {
-    if (f.geometry.type === 'Polygon') {
-      const isContaining = isPointInPolygon(point, f.geometry.coordinates);
-      f.geometry.coordinates.forEach((ring) => checkRing(ring, isContaining));
-    } else if (f.geometry.type === 'MultiPolygon') {
-      for (const polygonCoords of f.geometry.coordinates) {
-        const isContaining = isPointInPolygon(point, polygonCoords);
-        polygonCoords.forEach((ring) => checkRing(ring, isContaining));
-      }
-    }
-  }
-
-  return nearestPoint;
-}
-
-/** Proyecta un punto sobre un segmento AB y retorna el punto más cercano */
-function nearestPointOnSegment(p: Point, a: Point, b: Point): Point {
-  const dx = b.longitude - a.longitude;
-  const dy = b.latitude - a.latitude;
-  const lenSq = dx * dx + dy * dy;
-  if (lenSq === 0) return a;
-  let t = ((p.longitude - a.longitude) * dx + (p.latitude - a.latitude) * dy) / lenSq;
-  t = Math.max(0, Math.min(1, t));
-  return {
-    latitude: a.latitude + t * dy,
-    longitude: a.longitude + t * dx,
-  };
-}
-
-/** Distancia euclidiana simple entre dos puntos */
-function euclideanDistance(a: Point, b: Point): number {
-  const dx = b.longitude - a.longitude;
-  const dy = b.latitude - a.latitude;
-  return Math.sqrt(dx * dx + dy * dy);
-}

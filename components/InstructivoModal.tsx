@@ -5,6 +5,7 @@ import {
   Dimensions, Image, Modal, ScrollView, StyleSheet,
   Text, TouchableOpacity, View
 } from 'react-native';
+import { useRouteContext } from '../context/RouteContext';
 
 const INSTRUCTIVO_KEY = 'instructivo_visto_v4';
 const { width: SW } = Dimensions.get('window');
@@ -132,12 +133,20 @@ export default function InstructivoModal() {
   const [visible, setVisible] = useState(false);
   const [paso, setPaso] = useState(0);
   const [noMostrarMas, setNoMostrarMas] = useState(false);
+  const { instructivoTrigger } = useRouteContext();
 
   useEffect(() => {
     AsyncStorage.getItem(INSTRUCTIVO_KEY)
       .then((value) => { if (value !== 'never') setVisible(true); })
       .catch(() => setVisible(true));
   }, []);
+
+  useEffect(() => {
+    if (instructivoTrigger === 0) return;
+    setPaso(0);
+    setNoMostrarMas(false);
+    setVisible(true);
+  }, [instructivoTrigger]);
 
   const handleCerrar = async () => {
     if (noMostrarMas) {

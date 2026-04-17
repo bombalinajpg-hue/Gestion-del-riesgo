@@ -393,7 +393,7 @@ export default function MapViewContainer() {
 
       {evacuando && routeCoords.length > 0 && (
         <View style={styles.evacuandoBanner}>
-          <Text style={styles.evacuandoText}>🚨  Dirigiéndote al punto </Text>
+          <Text style={styles.evacuandoText}>🚨  Evacuando</Text>
         </View>
       )}
 

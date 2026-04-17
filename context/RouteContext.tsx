@@ -49,6 +49,8 @@ interface RouteContextType {
   // ✅ FIX 4: señal para que MainMenu haga scroll a la sección de destinos
   shouldScrollToDestinos: boolean;
   setShouldScrollToDestinos: React.Dispatch<React.SetStateAction<boolean>>;
+  instructivoTrigger: number;
+  requestShowInstructivo: () => void;
 }
 
 const RouteContext = createContext<RouteContextType | undefined>(undefined);
@@ -65,6 +67,8 @@ export const RouteProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [destinationMode, setDestinationMode] = useState<DestinationMode>('selected');
   const [shouldCenterOnUser, setShouldCenterOnUser] = useState(false);
   const [shouldScrollToDestinos, setShouldScrollToDestinos] = useState(false);
+  const [instructivoTrigger, setInstructivoTrigger] = useState(0);
+  const requestShowInstructivo = () => setInstructivoTrigger((n) => n + 1);
   const [blockedRoutes, setBlockedRoutes] = useState<FeatureCollection>({
     type: 'FeatureCollection',
     features: []
@@ -100,6 +104,7 @@ export const RouteProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         destinationMode, setDestinationMode,
         shouldCenterOnUser, setShouldCenterOnUser,
         shouldScrollToDestinos, setShouldScrollToDestinos,
+        instructivoTrigger, requestShowInstructivo,
       }}
     >
       {children}

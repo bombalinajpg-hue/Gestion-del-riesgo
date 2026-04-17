@@ -1,8 +1,8 @@
 import { MaterialIcons } from '@expo/vector-icons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DrawerContentComponentProps } from '@react-navigation/drawer';
 import React, { useEffect, useRef } from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouteContext } from '../context/RouteContext';
 import destinos from '../data/destinos.json';
 import instituciones from '../data/instituciones.json';
@@ -32,6 +32,7 @@ const iconoPorInstitucion: Record<string, string> = {
 };
 
 export default function MainMenu({ navigation }: DrawerContentComponentProps) {
+  const insets = useSafeAreaInsets();
   const scrollRef = useRef<ScrollView>(null);
   const destinosYRef = useRef<number>(0);
 
@@ -45,6 +46,7 @@ export default function MainMenu({ navigation }: DrawerContentComponentProps) {
     setDestinationMode, destinationMode,
     setShouldCenterOnUser,
     shouldScrollToDestinos, setShouldScrollToDestinos,
+    requestShowInstructivo,
   } = useRouteContext();
 
   useEffect(() => {
@@ -91,7 +93,7 @@ export default function MainMenu({ navigation }: DrawerContentComponentProps) {
     <ScrollView
       ref={scrollRef}
       style={styles.wrapper}
-      contentContainerStyle={{ paddingBottom: 32 }}
+      contentContainerStyle={{ paddingBottom: 56 + insets.bottom }}
     >
       <View style={styles.card}>
 
@@ -102,7 +104,7 @@ export default function MainMenu({ navigation }: DrawerContentComponentProps) {
 
         {/* Tipo de Emergencia */}
         <Text style={styles.label}>Tipo de Emergencia</Text>
-        <View style={styles.buttonGroup}>
+        <View style={styles.emergencyGroup}>
           {[
             { label: 'Ninguna',            value: 'ninguna',            emoji: '—'  },
             { label: 'Inundación',         value: 'inundacion',         emoji: '🌊' },
@@ -111,10 +113,10 @@ export default function MainMenu({ navigation }: DrawerContentComponentProps) {
           ].map((option) => (
             <TouchableOpacity
               key={option.value}
-              style={[styles.optionButton, emergencyType === option.value && styles.optionButtonActive]}
+              style={[styles.emergencyButton, emergencyType === option.value && styles.optionButtonActive]}
               onPress={() => setEmergencyType(option.value as EmergencyType)}
             >
-              <Text style={[styles.optionText, emergencyType === option.value && styles.optionTextActive]}>
+              <Text style={[styles.emergencyText, emergencyType === option.value && styles.optionTextActive]}>
                 {option.emoji} {option.label}
               </Text>
             </TouchableOpacity>
@@ -342,9 +344,9 @@ export default function MainMenu({ navigation }: DrawerContentComponentProps) {
         {/* ── Ver guía ───────────────────────────────────────────────────── */}
         <TouchableOpacity
           style={styles.verGuiaBtn}
-          onPress={async () => {
-            await AsyncStorage.removeItem('instructivo_visto_v4');
+          onPress={() => {
             navigation.closeDrawer();
+            requestShowInstructivo();
           }}
         >
           <MaterialIcons name="help-outline" size={18} color="#118ab2" style={{ marginRight: 8 }} />
@@ -370,10 +372,23 @@ const styles = StyleSheet.create({
   },
   sectionSubtitle: { fontSize: 11, color: '#888', marginBottom: 4 },
   buttonGroup: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8 },
-  optionButton: { paddingVertical: 8, paddingHorizontal: 14, borderRadius: 20, backgroundColor: '#f4f4f4', borderWidth: 1, borderColor: '#e0e0e0' },
+  optionButton: {
+    paddingVertical: 10, paddingHorizontal: 14,
+    borderRadius: 20, backgroundColor: '#f4f4f4',
+    borderWidth: 1, borderColor: '#e0e0e0',
+    flexGrow: 1, minWidth: 90, alignItems: 'center',
+  },
   optionButtonActive: { backgroundColor: '#118ab2', borderColor: '#118ab2' },
-  optionText: { color: '#073b4c', fontWeight: '500', fontSize: 13 },
+  optionText: { color: '#073b4c', fontWeight: '600', fontSize: 14, textAlign: 'center' },
   optionTextActive: { color: '#ffffff' },
+  emergencyGroup: { gap: 8, marginBottom: 8 },
+  emergencyButton: {
+    paddingVertical: 12, paddingHorizontal: 14,
+    borderRadius: 12, backgroundColor: '#f4f4f4',
+    borderWidth: 1, borderColor: '#e0e0e0',
+    alignItems: 'center',
+  },
+  emergencyText: { color: '#073b4c', fontWeight: '600', fontSize: 14 },
   inlineHint: {
     fontSize: 12, color: '#856404',
     backgroundColor: '#fff3cd', borderRadius: 8,
