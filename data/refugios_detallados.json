@@ -1,0 +1,45 @@
+[
+  {
+    "nombre": "Coliseo Municipal",
+    "capacidadMax": 500,
+    "capacidadActual": 0,
+    "servicios": ["agua", "banos", "electricidad", "primeros_auxilios", "accesibilidad_silla"],
+    "responsable": "Defensa Civil Santa Rosa",
+    "telefonoContacto": "+57 316 000 0000",
+    "horario": "24/7 durante emergencia",
+    "descripcion": "Refugio principal con mayor capacidad del municipio.",
+    "notas": "Acceso por la entrada sur. Llevar documento de identidad."
+  },
+  {
+    "nombre": "Polideportivo La Villa",
+    "capacidadMax": 250,
+    "servicios": ["agua", "banos", "electricidad"],
+    "responsable": "Secretaría de Deportes",
+    "horario": "Habilitado en activación",
+    "descripcion": "Escenario deportivo cubierto apto para alojamiento temporal."
+  },
+  {
+    "nombre": "Parque Principal",
+    "capacidadMax": 800,
+    "servicios": ["agua"],
+    "descripcion": "Punto de encuentro al aire libre, zona central segura.",
+    "notas": "Se recomienda para encuentro inicial antes de llegar a refugio techado."
+  },
+  {
+    "nombre": "Iglesia Central",
+    "capacidadMax": 400,
+    "servicios": ["agua", "banos", "abrigo"],
+    "responsable": "Párroco",
+    "telefonoContacto": "+57 6 333 0000",
+    "horario": "24/7",
+    "descripcion": "Iglesia con salones parroquiales habilitados en emergencias."
+  },
+  {
+    "nombre": "Colegio Técnico",
+    "capacidadMax": 350,
+    "servicios": ["agua", "banos", "electricidad", "primeros_auxilios", "ducha"],
+    "responsable": "Rector / Defensa Civil",
+    "horario": "Habilitado bajo activación institucional",
+    "descripcion": "Planta física escolar con amplias aulas y zonas comunes."
+  }
+]

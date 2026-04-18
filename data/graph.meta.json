@@ -1,0 +1,15 @@
+{
+  "source": "overpass",
+  "builtAt": "2026-04-18T02:04:50.000Z",
+  "area": "Santa Rosa de Cabal",
+  "nodeCount": 6538,
+  "edgeCount": 13363,
+  "sizeKb": 2203.3,
+  "taggedEdges": 270,
+  "bbox": {
+    "minLat": 4.8355748,
+    "maxLat": 4.9098998,
+    "minLng": -75.6425916,
+    "maxLng": -75.5792642
+  }
+}
