@@ -1,50 +1,84 @@
-# Welcome to your Expo app 👋
+# v4.3 — Pantalla de inicio + 6 módulos con Expo Router
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+Reestructura la navegación: en vez de entrar directo al mapa, la app ahora
+abre una **pantalla de inicio (Home)** con tarjetas para cada módulo.
 
-## Get started
+## Estructura nueva
 
-1. Install dependencies
-
-   ```bash
-   npm install
-   ```
-
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
-
-```bash
-npm run reset-project
+```
+app/
+├── _layout.tsx           ← Stack raíz + RouteProvider
+├── index.tsx             ← HomeScreen (pantalla inicial)
+├── map.tsx               ← Mapa con Drawer interno
+├── emergency.tsx         ← Durante la emergencia
+├── community.tsx         ← Participación ciudadana
+├── training.tsx          ← Capacitación (5 lecciones)
+├── prepare.tsx           ← Preparación (kit + plan)
+└── statistics.tsx        ← Datos abiertos
+screens/
+├── HomeScreen.tsx
+├── EmergencyScreen.tsx
+├── CommunityScreen.tsx
+├── TrainingScreen.tsx
+├── PrepareScreen.tsx
+└── StatisticsScreen.tsx
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+## Archivos para AGREGAR al proyecto
 
-## Learn more
+Copia TODO el contenido de `app/` y `screens/` a tu proyecto.
 
-To learn more about developing your project with Expo, look at the following resources:
+Los archivos de `app/` REEMPLAZAN los que tengas. En particular:
+- `app/_layout.tsx` — NUEVO (tu layout actual probablemente no tiene el Stack completo)
+- `app/index.tsx` — REEMPLAZA (si ya existe, hacía entrar directo al mapa)
+- `app/map.tsx` — NUEVO (el mapa ahora es una pantalla separada)
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+## Archivos de tu proyecto que NO cambian
 
-## Join the community
+- Todos los `components/` del proyecto (MapViewContainer, MainMenu, modales, etc.)
+- `context/RouteContext.tsx` (el de v4.2 sigue funcionando)
+- Todos los `src/services/` y `src/utils/`
+- `data/`
 
-Join our community of developers creating universal apps.
+## Qué hacer después de copiar
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+1. Verifica que tienes instalado `expo-router` y `@react-navigation/drawer`:
+
+```bash
+npx expo install expo-router @react-navigation/drawer
+```
+
+2. Reinicia con cache limpio:
+
+```bash
+npx expo start --clear
+```
+
+## Flujo de navegación
+
+- **Home** ← pantalla inicial de la app
+- Toca "Calcular ruta" o card de Rutas → `/map` (drawer con selección)
+- Toca card de Emergencia → `/emergency` (acciones rápidas)
+- Toca card de Participación → `/community` (reportes + familia + desaparecidos)
+- Toca card de Capacitación → `/training` (5 lecciones UNGRD)
+- Toca card de Prepárate → `/prepare` (kit 72h + plan familiar)
+- Toca card de Estadísticas → `/statistics` (datos del municipio)
+- Botón 123 flotante siempre visible en Home
+
+## Características del diseño
+
+- **Hero oscuro** con nombre de la app y badge "SANTA ROSA DE CABAL"
+- **CTA principal turquesa** para la acción más común (calcular ruta)
+- **Grid 2x3** con cada módulo en su color distintivo
+- **Status card** que muestra progreso del kit + grupo familiar
+- **Alert bar** roja que aparece solo si hay alertas activas cerca
+- **Badge con número** en cards que tienen conteos activos (ej. desaparecidos)
+- **Botón 123** flotante rojo que NUNCA desaparece
+
+## Notas académicas
+
+Este cambio de arquitectura tiene valor para la pasantía:
+- Demuestra uso de Expo Router (estándar moderno)
+- Separa claramente responsabilidades por pantalla
+- Mejora UX: el usuario nuevo ya no se pierde en la pantalla del mapa
+- Escalable: agregar un nuevo módulo es solo crear una pantalla + tarjeta

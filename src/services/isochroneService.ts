@@ -153,8 +153,6 @@ export interface IsochroneQuery {
   timeSeconds: number;
   destNodeId: number;
   destName: string;
-  /** Distancia del usuario al nodo del grafo más cercano (para transparencia) */
-  snapDistanceMeters: number;
 }
 
 /**
@@ -171,16 +169,15 @@ export function queryFromLocation(
   table: IsochroneTable,
   graph: Graph
 ): IsochroneQuery | null {
-  const snap = snapToNearestNode(lat, lng, graph);
-  if (!snap) return null;
-  const entry = table.entries[snap.nodeIndex];
+  const nodeIndex = snapToNearestNode(lat, lng, graph);
+  if (nodeIndex === null) return null;
+  const entry = table.entries[nodeIndex];
   if (!entry || !isFinite(entry.timeSeconds)) return null;
 
   return {
     timeSeconds: entry.timeSeconds,
     destNodeId: entry.destNodeId,
     destName: entry.destName,
-    snapDistanceMeters: snap.distanceMeters,
   };
 }
 

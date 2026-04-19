@@ -1,20 +1,21 @@
 /**
- * Componente principal del mapa — versión v4.
+ * Componente principal del mapa — versión v4.2.
  *
- * Nuevas features sobre v3:
- *   - Marker de destino tappable → abre RefugeDetailsModal
- *   - Botón 👥 (grupo familiar) en columna izquierda
- *   - Botón 🔍 (personas desaparecidas) en columna izquierda
- *   - Markers de personas desaparecidas en el mapa (naranja)
- *   - Markers de miembros del grupo familiar que compartieron ubicación
- *   - Loading spinner en el botón iniciar cuando está calculando
- *   - Debounce de 200ms para recalcular rutas — evita re-cómputos
- *     cuando el usuario cambia parámetros rápidamente
+ * Fixes críticos sobre v4.1:
+ *   1. graphNodeId: snap manual inline con snapToNearestNode, asignando
+ *      TANTO graphNodeId como graphNode (triple seguro) para que
+ *      precomputeIsochrones no falle con "ningún destino linked".
+ *   2. destinoFinal se actualiza apenas el usuario elige (antes solo
+ *      se actualizaba tras calcular la ruta, causando que los botones
+ *      Ir aquí / Street View no aparecieran hasta tocar el marcador).
+ *   3. Botones "Ir aquí" + "Street View" visibles apenas se elige
+ *      destino (no requieren que la ruta esté calculada).
  *
- * Requisito externo:
- *   - `.env` debe tener `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY=...`
- *     para que Street View embebido funcione
- *   - `npx expo install expo-clipboard` (para grupo familiar)
+ * UX nueva:
+ *   - Botón flotante "IR AQUÍ" siempre visible cuando hay destino y
+ *     no estamos evacuando. Calcula ruta + entra en modo evacuación.
+ *   - Botón "Ver instituciones" en pantalla principal.
+ *   - Modo "elegir destino desde el mapa con isócronas".
  */
 
 import { MaterialIcons } from "@expo/vector-icons";
@@ -26,6 +27,7 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  AppState,
   Linking,
   Modal,
   StyleSheet,
@@ -41,41 +43,46 @@ import InundacionData from "../data/amenaza_inundacion.json";
 import movimientoMasaData from "../data/amenaza_movimiento_en_masa.json";
 import destinosRaw from "../data/destinos.json";
 import rawGraph from "../data/graph.json";
+import institucionesRaw from "../data/instituciones.json";
+import { getAllGroups } from "../src/services/familyGroupsService";
+import {
+  getGraph,
+  linkDestinations,
+  loadGraph,
+  type RawGraph,
+} from "../src/services/graphService";
+import {
+  precomputeIsochrones,
+  queryFromLocation,
+} from "../src/services/isochroneService";
+import { computeRoute } from "../src/services/localRouter";
+import { getActiveMissing } from "../src/services/missingPersonsService";
 import {
   fetchPOIs,
   getCategoryIcon,
   POIFeature,
 } from "../src/services/poiService";
-import type {
-  Destino,
-  DestinoFinal,
-  HazardFeatureProperties,
-} from "../src/types/types";
-import {
-  getGraph,
-  linkDestinations,
-  loadGraph,
-} from "../src/services/graphService";
-import { computeRoute } from "../src/services/localRouter";
-import {
-  precomputeIsochrones,
-  queryFromLocation,
-} from "../src/services/isochroneService";
+import { getRefugeByName } from "../src/services/refugesService";
 import {
   getActiveBlockingAlerts,
   recomputePublicAlerts,
 } from "../src/services/reportsService";
-import { getActiveMissing } from "../src/services/missingPersonsService";
-import { getAllGroups } from "../src/services/familyGroupsService";
-import { getRefugeByName } from "../src/services/refugesService";
 import type { IsochroneTable, PublicAlert } from "../src/types/graph";
-import type { MissingPerson, FamilyGroup, RefugeDetails } from "../src/types/v4";
+import type {
+  Destino,
+  DestinoFinal,
+  HazardFeatureProperties,
+  Institucion,
+} from "../src/types/types";
+import type { FamilyGroup, MissingPerson, RefugeDetails } from "../src/types/v4";
 import {
   findPolygonExitPoint,
   isPointInAnyPolygonOrMulti,
 } from "../src/utils/geometry";
+import { prewarmSnapIndex, snapToNearestNode } from "../src/utils/snapToGraph";
 import { useRouteCalculationState } from "../src/utils/useRouteCalculationState";
 import FamilyGroupModal from "./FamilyGroupModal";
+import IsochroneLegend from "./IsochroneLegend";
 import IsochroneOverlay from "./IsochroneOverlay";
 import MissingPersonsModal from "./MissingPersonsModal";
 import PreparednessModal from "./PreparednessModal";
@@ -89,6 +96,11 @@ import WeatherBadge from "./WeatherBadge";
 type HazardCollection = FeatureCollection<Geometry, HazardFeatureProperties>;
 
 const destinos = destinosRaw as Destino[];
+const instituciones = institucionesRaw as Institucion[];
+
+// Destino con id de nodo del grafo (asignado por snap). Es la forma que
+// precomputeIsochrones espera en su parámetro `destinations`.
+type LinkedDestino = Destino & { graphNodeId: number; graphNode: number };
 const avenidaTorrencial = avenidaTorrencialData as HazardCollection;
 const inundacion = InundacionData as HazardCollection;
 const movimientoMasa = movimientoMasaData as HazardCollection;
@@ -131,6 +143,27 @@ function closestByHaversine<T extends { lat: number; lng: number }>(
     if (d < bestDist) { bestDist = d; best = it; }
   }
   return best;
+}
+
+function findClosestViaGraph(
+  userLat: number,
+  userLng: number,
+  destinations: Destino[],
+  isoTable: IsochroneTable | null,
+): Destino | null {
+  if (isoTable) {
+    try {
+      const graph = getGraph();
+      const query = queryFromLocation(userLat, userLng, isoTable, graph);
+      if (query && query.destName) {
+        const dest = destinations.find((d) => d.nombre === query.destName);
+        if (dest) return dest;
+      }
+    } catch (e) {
+      console.warn("[MapView] findClosestViaGraph:", e);
+    }
+  }
+  return closestByHaversine({ latitude: userLat, longitude: userLng }, destinations);
 }
 
 function NorthArrow({ heading }: { heading: number }) {
@@ -219,6 +252,8 @@ export default function MapViewContainer() {
   const [missingPersons, setMissingPersons] = useState<MissingPerson[]>([]);
   const [familyGroups, setFamilyGroups] = useState<FamilyGroup[]>([]);
   const [isoTable, setIsoTable] = useState<IsochroneTable | null>(null);
+  const [isoError, setIsoError] = useState<string | null>(null);
+  const [isoComputing, setIsoComputing] = useState(false);
   const [showIsochroneOverlay, setShowIsochroneOverlay] = useState(false);
 
   const { isCalculating, setCalculating, scheduleCalculation, cancelAll } = useRouteCalculationState();
@@ -233,10 +268,17 @@ export default function MapViewContainer() {
     emergencyType, setEmergencyType,
     shouldCenterOnUser, setShouldCenterOnUser,
     setShouldScrollToDestinos,
+    pickingFromIsochroneMap, setPickingFromIsochroneMap,
+    showingInstitucionesOverlay, setShowingInstitucionesOverlay,
   } = useRouteContext();
 
   const abortRef = useRef<AbortController | null>(null);
-  const linkedDestinosRef = useRef<ReturnType<typeof linkDestinations> | null>(null);
+  const linkedDestinosRef = useRef<LinkedDestino[]>([]);
+  // Si la última ruta auto-sugerida (modo "closest") se resolvió sin la
+  // tabla de isócronas (fallback haversine), queremos recomputar apenas
+  // la tabla esté disponible — si no, el usuario se queda con un destino
+  // sub-óptimo que ignoró las penalizaciones de amenaza.
+  const lastClosestUsedIsoRef = useRef<boolean>(false);
 
   const mmBaja = filterByCategoria(movimientoMasa, "Baja");
   const mmMedia = filterByCategoria(movimientoMasa, "Media");
@@ -248,16 +290,45 @@ export default function MapViewContainer() {
 
   const navigation = useNavigation();
 
-  // ── Grafo ───────────────────────────────────────────────────────────────
+  const puntosEncuentro = useMemo(
+    () => destinos.filter((d) => d.tipo === "punto_encuentro"),
+    [],
+  );
+
+  // ── Grafo: carga + SNAP MANUAL con doble seguro de nombres ──────────────
   useEffect(() => {
     try {
-      loadGraph(rawGraph as any);
-      linkedDestinosRef.current = linkDestinations(destinos.filter((d) => d.tipo === "punto_encuentro"));
+      loadGraph(rawGraph as unknown as RawGraph);
+      const g = getGraph();
+      prewarmSnapIndex(g);
+      // Llamamos linkDestinations por si tiene efectos secundarios en el
+      // grafo (puede crear aristas hacia los destinos), pero NO confiamos
+      // que asigne graphNodeId correctamente.
+      try { linkDestinations(puntosEncuentro); } catch (e) {
+        console.warn("[MapView] linkDestinations:", e);
+      }
+      // ★ FIX CRÍTICO: snap manual. `snapToNearestNode` devuelve el ÍNDICE
+      // del nodo en el array; `precomputeIsochrones` y los algoritmos
+      // esperan el ID real (graph.nodes[i].id). Traducir aquí es lo que
+      // evita que las isócronas arranquen desde nodos equivocados.
+      const linked: LinkedDestino[] = puntosEncuentro.flatMap((d) => {
+        const idx = snapToNearestNode(d.lat, d.lng, g);
+        if (idx === null) return [];
+        const nodeId = g.nodes[idx].id;
+        return [{ ...d, graphNodeId: nodeId, graphNode: nodeId }];
+      });
+      linkedDestinosRef.current = linked;
+      if (linked.length === 0) {
+        console.error("[MapView] Ningún destino pudo ser snapeado al grafo");
+      } else {
+        console.log(`[MapView] ${linked.length}/${puntosEncuentro.length} destinos snapeados al grafo`);
+      }
       setGraphReady(true);
     } catch (e) {
       console.error("[MapView] Fallo al cargar grafo:", e);
       Alert.alert("Grafo no disponible", "Ejecuta `node scripts/build-graph.js`.");
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ── Ubicación ───────────────────────────────────────────────────────────
@@ -268,21 +339,35 @@ export default function MapViewContainer() {
     (async () => {
       try {
         const enabled = await Location.hasServicesEnabledAsync();
-        if (!enabled) { if (!cancelled) { setLocationError("disabled"); setLoading(false); } return; }
+        if (cancelled) return;
+        if (!enabled) { setLocationError("disabled"); setLoading(false); return; }
         const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== "granted") { if (!cancelled) { setLocationError("denied"); setLoading(false); } return; }
+        if (cancelled) return;
+        if (status !== "granted") { setLocationError("denied"); setLoading(false); return; }
         try {
           const fix = await Location.getLastKnownPositionAsync();
-          if (fix && !cancelled) { setLocation(fix.coords); setLoading(false); }
-        } catch {}
+          if (cancelled) return;
+          if (fix) { setLocation(fix.coords); setLoading(false); }
+        } catch (e) {
+          console.warn("[MapView] getLastKnownPositionAsync:", e);
+        }
+        // Importante: si el cleanup corre durante el await, devolvemos la sub
+        // recién creada para que no quede viva (drenando batería + setState
+        // sobre componente desmontado).
         locSub = await Location.watchPositionAsync(
           { accuracy: Location.Accuracy.High, distanceInterval: 3 },
           (loc) => { if (!cancelled) { setLocation(loc.coords); setLoading(false); } },
         );
+        if (cancelled) { locSub.remove(); locSub = undefined; return; }
         headSub = await Location.watchHeadingAsync((h) => {
-          if (!cancelled) setHeading(h.trueHeading ?? h.magHeading ?? 0);
+          if (!cancelled) {
+            const raw = h.trueHeading ?? h.magHeading ?? 0;
+            setHeading(raw >= 0 ? raw : 0);
+          }
         });
-      } catch {
+        if (cancelled) { headSub.remove(); headSub = undefined; return; }
+      } catch (e) {
+        console.warn("[MapView] Location setup:", e);
         if (!cancelled) { setLocationError("error"); setLoading(false); }
       }
     })();
@@ -310,6 +395,15 @@ export default function MapViewContainer() {
     }
   }, [startPoint]);
 
+  // ★ FIX ISSUE 4: setear destinoFinal apenas el usuario elige
+  // (antes solo se seteaba tras calcular la ruta)
+  useEffect(() => {
+    const picked = selectedInstitucion ?? selectedDestination;
+    if (picked) {
+      setDestinoFinal({ nombre: picked.nombre, lat: picked.lat, lng: picked.lng });
+    }
+  }, [selectedDestination, selectedInstitucion]);
+
   useEffect(() => {
     if (selectedDestination || selectedInstitucion) {
       setResaltarIniciar(true);
@@ -322,9 +416,27 @@ export default function MapViewContainer() {
     }
   }, [selectedDestination, selectedInstitucion]);
 
-  useEffect(() => { fetchPOIs(4.8767129, -75.627213).then(setPois); }, []);
+  // POIs: se cargan una vez alrededor del usuario cuando el GPS ya dio
+  // un fix; si aún no hay fix al momento de estar listo el grafo, caemos
+  // al centroide del bbox. No re-fetcheamos al moverse (buffer de 1.5 km
+  // absorbe el desplazamiento peatonal típico de una sesión).
+  const poisFetchedRef = useRef(false);
+  useEffect(() => {
+    if (!graphReady || poisFetchedRef.current) return;
+    let lat: number, lng: number;
+    if (location) {
+      lat = location.latitude; lng = location.longitude;
+    } else {
+      const b = getGraph().bbox;
+      lat = (b.minLat + b.maxLat) / 2;
+      lng = (b.minLng + b.maxLng) / 2;
+    }
+    poisFetchedRef.current = true;
+    let cancelled = false;
+    fetchPOIs(lat, lng).then((p) => { if (!cancelled) setPois(p); });
+    return () => { cancelled = true; };
+  }, [graphReady, location]);
 
-  // ── Alertas + desaparecidos + grupo familiar (refresh periódico) ───────
   const refreshAux = async () => {
     try {
       await recomputePublicAlerts();
@@ -334,30 +446,64 @@ export default function MapViewContainer() {
     } catch (e) { console.warn("[MapView] refreshAux:", e); }
   };
 
+  // Poll de alertas/desaparecidos/familia cada 60 s, SOLO con la app en
+  // primer plano. Sin este gate el interval sigue corriendo en background
+  // y consume batería + datos mientras nadie lo está viendo.
   useEffect(() => {
     if (!graphReady) return;
-    refreshAux();
-    const t = setInterval(refreshAux, 60_000);
-    return () => clearInterval(t);
+    let interval: ReturnType<typeof setInterval> | null = null;
+    const start = () => {
+      if (interval !== null) return;
+      refreshAux();
+      interval = setInterval(refreshAux, 60_000);
+    };
+    const stop = () => {
+      if (interval !== null) { clearInterval(interval); interval = null; }
+    };
+    if (AppState.currentState === "active") start();
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active") start(); else stop();
+    });
+    return () => { stop(); sub.remove(); };
   }, [graphReady]);
 
-  // ── Isócronas con debounce ──────────────────────────────────────────────
+  const computeIso = async (): Promise<IsochroneTable | null> => {
+    if (!graphReady || linkedDestinosRef.current.length === 0) {
+      setIsoError("No hay destinos válidos en el grafo");
+      return null;
+    }
+    if (emergencyType === "ninguna") {
+      setIsoError(null);
+      setIsoTable(null);
+      return null;
+    }
+    setIsoError(null);
+    setIsoComputing(true);
+    try {
+      const table = await precomputeIsochrones({
+        profile: routeProfile ?? "foot-walking",
+        emergencyType,
+        destinations: linkedDestinosRef.current,
+      });
+      setIsoTable(table);
+      return table;
+    } catch (e: any) {
+      const msg = String(e?.message ?? e);
+      console.error("[MapView] Isócronas fallaron:", e);
+      setIsoError(msg);
+      setIsoTable(null);
+      return null;
+    } finally {
+      setIsoComputing(false);
+    }
+  };
+
   useEffect(() => {
     if (!graphReady) return;
-    if (emergencyType === "ninguna") { setIsoTable(null); return; }
-    if (!linkedDestinosRef.current) return;
-    let cancelled = false;
-    const t = setTimeout(async () => {
-      try {
-        const table = await precomputeIsochrones({
-          profile: routeProfile ?? "foot-walking",
-          emergencyType,
-          destinations: linkedDestinosRef.current!,
-        });
-        if (!cancelled) setIsoTable(table);
-      } catch (e) { console.warn("[MapView] Isócronas:", e); }
-    }, 200);
-    return () => { cancelled = true; clearTimeout(t); };
+    if (emergencyType === "ninguna") { setIsoTable(null); setIsoError(null); return; }
+    const t = setTimeout(() => { computeIso(); }, 200);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [graphReady, emergencyType, routeProfile]);
 
   // ── Cálculo de ruta ─────────────────────────────────────────────────────
@@ -368,16 +514,21 @@ export default function MapViewContainer() {
     abortRef.current = controller;
 
     let finalDestination: DestinoFinal | null = selectedInstitucion ?? selectedDestination;
-    const puntosEncuentro = destinos.filter((d) => d.tipo === "punto_encuentro");
+    let closestUsedIso = false;
 
-    if (destinationMode === "closest") {
-      const userLocation = startMode === "manual" && startPoint
-        ? { latitude: startPoint.lat, longitude: startPoint.lng }
-        : { latitude: location.latitude, longitude: location.longitude };
-      finalDestination = closestByHaversine(userLocation, puntosEncuentro);
+    if (!finalDestination && destinationMode === "closest") {
+      const userLat = startMode === "manual" && startPoint ? startPoint.lat : location.latitude;
+      const userLng = startMode === "manual" && startPoint ? startPoint.lng : location.longitude;
+      let iso = isoTable;
+      if (!iso && emergencyType !== "ninguna") {
+        iso = await computeIso();
+      }
+      closestUsedIso = iso !== null;
+      finalDestination = findClosestViaGraph(userLat, userLng, puntosEncuentro, iso);
     }
     if (!finalDestination) return;
     setDestinoFinal(finalDestination);
+    lastClosestUsedIsoRef.current = closestUsedIso;
 
     const hazardSource: HazardCollection | undefined =
       emergencyType === "inundacion" ? inundacion
@@ -394,7 +545,7 @@ export default function MapViewContainer() {
     const startLat = startMode === "manual" && startPoint ? startPoint.lat : location.latitude;
     const startLng = startMode === "manual" && startPoint ? startPoint.lng : location.longitude;
     const profile = routeProfile ?? "foot-walking";
-    const alternativeEnds = destinationMode === "closest"
+    const alternativeEnds = (!selectedInstitucion && !selectedDestination && destinationMode === "closest")
       ? puntosEncuentro.map((d) => ({ lat: d.lat, lng: d.lng, name: d.nombre })) : undefined;
 
     try {
@@ -414,7 +565,7 @@ export default function MapViewContainer() {
         setAlertaDangerMostrada(true);
         Alert.alert("⚠️ Estás en zona de riesgo", "Sigue la ruta para salir del área peligrosa.", [{ text: "Entendido" }]);
       }
-      if (destinationMode === "closest" && result.destinationName && result.destinationName !== finalDestination.nombre) {
+      if (alternativeEnds && result.destinationName && result.destinationName !== finalDestination.nombre) {
         const chosen = puntosEncuentro.find((d) => d.nombre === result.destinationName);
         if (chosen) setDestinoFinal({ nombre: chosen.nombre, lat: chosen.lat, lng: chosen.lng });
       }
@@ -430,11 +581,10 @@ export default function MapViewContainer() {
     }
   };
 
-  // ── Auto-cálculo con debounce ───────────────────────────────────────────
   const autoCalcDeps = [
     graphReady, emergencyType, routeProfile, destinationMode,
     selectedDestination, selectedInstitucion, startMode, startPoint,
-    puntoConfirmado, location,
+    puntoConfirmado, location, isoTable,
   ];
   useEffect(() => {
     if (evacuando) return;
@@ -443,14 +593,30 @@ export default function MapViewContainer() {
     const ubicacionLista = startMode === "gps" || (startMode === "manual" && startPoint !== null && puntoConfirmado);
     const destinoListo = destinationMode === "closest" || selectedDestination !== null || selectedInstitucion !== null;
     if (!ubicacionLista || !destinoListo || !routeProfile) return;
-    if (rutaSugerida && routeCoords.length > 0) return;
-    // Debounce de 300ms para que cambios rápidos no disparen muchos cálculos
-    scheduleCalculation('auto-route', () => calcularRuta(false), 300);
+    // Permitir un re-cálculo adicional cuando la tabla de isócronas acaba
+    // de llegar y el cálculo anterior (modo "closest") usó el fallback
+    // haversine: sin esto, el usuario se queda con un destino sub-óptimo.
+    const canImproveWithIso =
+      destinationMode === "closest" && isoTable !== null && !lastClosestUsedIsoRef.current;
+    if (rutaSugerida && routeCoords.length > 0 && !canImproveWithIso) return;
+    scheduleCalculation('auto-route', () => calcularRuta(false), 150);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, autoCalcDeps);
 
-  const iniciarEvacuacion = async () => {
-    if (!location || evacuando || !graphReady) return;
+  // ★ "IR AQUÍ" — botón principal que calcula ruta + inicia evacuación
+  const handleIrAqui = async () => {
+    if (!destinoFinal || !location || !graphReady || evacuando) return;
+    if (emergencyType === "ninguna") {
+      Alert.alert(
+        "Selecciona una emergencia",
+        "Para calcular la ruta, primero elige un tipo de emergencia desde el menú.",
+        [
+          { text: "Abrir menú", onPress: () => navigation.dispatch(DrawerActions.openDrawer()) },
+          { text: "Cancelar", style: "cancel" },
+        ],
+      );
+      return;
+    }
     await setCalculating(() => calcularRuta(true));
   };
 
@@ -480,12 +646,15 @@ export default function MapViewContainer() {
     setResaltarIniciar(false);
     setResumenRuta(null);
     setShowIsochroneOverlay(false);
+    setPickingFromIsochroneMap(false);
+    setShowingInstitucionesOverlay(false);
   };
 
   const handleResetConfirm = () => {
     const haySeleccion = emergencyType !== "ninguna" ||
       selectedDestination !== null || selectedInstitucion !== null ||
-      startMode === "manual" || rutaSugerida || evacuando;
+      startMode === "manual" || rutaSugerida || evacuando ||
+      pickingFromIsochroneMap || showingInstitucionesOverlay;
     if (!haySeleccion) return;
     Alert.alert(
       evacuando ? "Cancelar evacuación" : "Limpiar selección",
@@ -517,7 +686,6 @@ export default function MapViewContainer() {
       setRefugeDetailsData(details);
       setRefugeDetailsVisible(true);
     } else {
-      // Si no hay ficha detallada, mostramos un placeholder básico
       setRefugeDetailsData({
         nombre,
         servicios: [],
@@ -527,12 +695,66 @@ export default function MapViewContainer() {
     }
   };
 
+  const handleNavigateFromRefuge = () => {
+    handleIrAqui();
+  };
+
+  const handleIsochroneButton = async () => {
+    if (emergencyType === "ninguna") {
+      Alert.alert(
+        "Isócronas no disponibles",
+        "Selecciona un tipo de emergencia desde el menú para ver el mapa de tiempo a seguridad.",
+      );
+      return;
+    }
+    if (!isoTable) {
+      if (isoComputing) {
+        Alert.alert("Calculando...", "Las isócronas se están calculando. Espera un momento.");
+        return;
+      }
+      const table = await computeIso();
+      if (!table) {
+        Alert.alert(
+          "No se pudo calcular",
+          isoError ? `Detalle: ${isoError}` : "No fue posible calcular las isócronas.",
+        );
+        return;
+      }
+      setShowIsochroneOverlay(true);
+      return;
+    }
+    setShowIsochroneOverlay((v) => !v);
+  };
+
+  // ★ Click en marcador de destino (modo normal o modo picking)
+  const handleDestinationMarkerPress = (dest: Destino) => {
+    if (pickingFromIsochroneMap) {
+      // Usuario está eligiendo desde el mapa → confirmar selección
+      setSelectedDestination(dest);
+      setDestinationMode("manual");
+      setPickingFromIsochroneMap(false);
+      setShowIsochroneOverlay(false);
+      return;
+    }
+    if (showingInstitucionesOverlay) {
+      // No debería pasar aquí (los markers de instituciones son distintos)
+      return;
+    }
+    // Comportamiento normal: abrir ficha del refugio
+    handleOpenRefugeDetails(dest.nombre);
+  };
+
+  const handleInstitucionMarkerPress = (inst: Institucion) => {
+    setSelectedInstitucion(inst);
+    setShowingInstitucionesOverlay(false);
+    // destinoFinal se actualiza automáticamente por useEffect
+  };
+
   const userIsochroneQuery = useMemo(() => {
     if (!isoTable || !location || !graphReady) return null;
     return queryFromLocation(location.latitude, location.longitude, isoTable, getGraph());
   }, [isoTable, location, graphReady]);
 
-  // Miembros del grupo familiar con ubicación conocida — para marcadores
   const familyMembersWithLocation = useMemo(() => {
     const out: { deviceId: string; name: string; lat: number; lng: number; groupName: string }[] = [];
     for (const g of familyGroups) {
@@ -544,6 +766,20 @@ export default function MapViewContainer() {
     }
     return out;
   }, [familyGroups]);
+
+  // initialRegion derivado del bbox del grafo — así el mapa siempre abre
+  // enmarcando exactamente la zona cubierta, sin asumir una ciudad fija.
+  const initialRegion = useMemo(() => {
+    if (!graphReady) {
+      return { latitude: 4.8727, longitude: -75.6109, latitudeDelta: 0.07, longitudeDelta: 0.07 };
+    }
+    const b = getGraph().bbox;
+    const latitude = (b.minLat + b.maxLat) / 2;
+    const longitude = (b.minLng + b.maxLng) / 2;
+    const latitudeDelta = Math.max((b.maxLat - b.minLat) * 1.1, 0.01);
+    const longitudeDelta = Math.max((b.maxLng - b.minLng) * 1.1, 0.01);
+    return { latitude, longitude, latitudeDelta, longitudeDelta };
+  }, [graphReady]);
 
   if (locationError) {
     const mensajes: Record<LocationError, { titulo: string; detalle: string }> = {
@@ -573,16 +809,25 @@ export default function MapViewContainer() {
     );
 
   const ubicacionLista = startMode === "gps" || (startMode === "manual" && startPoint !== null && puntoConfirmado);
-  const destinoListo = destinationMode === "closest" || selectedDestination !== null || selectedInstitucion !== null;
-  const todosLosParametros = emergencyType !== "ninguna" && routeProfile !== null && destinoListo && ubicacionLista;
   const seleccionandoPunto = startMode === "manual" && !evacuando;
   const puntoPendiente = seleccionandoPunto && startPoint !== null && !puntoConfirmado;
   const hayRutaCalculada = routeCoords.length > 0 || dangerSegment.length > 0;
-  const mostrarBotonIniciar = todosLosParametros && !evacuando && hayRutaCalculada && rutaSugerida;
   const iconoModo = routeProfile === "driving-car" ? "🚗" : routeProfile === "cycling-regular" ? "🚴" : "🚶";
-  const mostrarIsocronas = showIsochroneOverlay && isoTable !== null && !evacuando && emergencyType !== "ninguna";
+  const mostrarIsocronas = (showIsochroneOverlay || pickingFromIsochroneMap) && isoTable !== null && !evacuando && emergencyType !== "ninguna";
   const mostrarBotonReset = emergencyType !== "ninguna" || selectedDestination !== null ||
-    selectedInstitucion !== null || startMode === "manual" || rutaSugerida || evacuando;
+    selectedInstitucion !== null || startMode === "manual" || rutaSugerida || evacuando ||
+    pickingFromIsochroneMap || showingInstitucionesOverlay;
+
+  // ★ Botón IR AQUÍ: visible cuando hay destino, ubicación lista, no evacuando, no en mode picking
+  const mostrarBotonIrAqui = destinoFinal !== null && ubicacionLista && !evacuando &&
+    !pickingFromIsochroneMap && !showingInstitucionesOverlay;
+
+  // Determinar qué destinos mostrar en el mapa
+  const destinosToShow: Destino[] = pickingFromIsochroneMap
+    ? puntosEncuentro
+    : destinoFinal
+      ? [destinoFinal as Destino]
+      : [];
 
   return (
     <View style={styles.container}>
@@ -597,7 +842,6 @@ export default function MapViewContainer() {
         <Text style={{ fontSize: 24 }}>☰</Text>
       </TouchableOpacity>
 
-      {/* ── Columna izquierda ─────────────────────────────────────────── */}
       <View style={styles.leftActionColumn} pointerEvents="box-none">
         <ReportButton
           onPress={() => setReportModalVisible(true)}
@@ -619,7 +863,6 @@ export default function MapViewContainer() {
         <TouchableOpacity
           style={[styles.squareActionBtn, { backgroundColor: "#7c3aed" }]}
           onPress={() => setFamilyModalVisible(true)}
-          accessibilityLabel="Grupo familiar"
         >
           <Text style={{ fontSize: 20 }}>👨‍👩‍👧</Text>
         </TouchableOpacity>
@@ -630,7 +873,6 @@ export default function MapViewContainer() {
             missingPersons.length > 0 && { borderWidth: 2, borderColor: "#fef3c7" },
           ]}
           onPress={() => setMissingModalVisible(true)}
-          accessibilityLabel="Personas desaparecidas"
         >
           <Text style={{ fontSize: 20 }}>🔍</Text>
           {missingPersons.length > 0 && (
@@ -639,9 +881,19 @@ export default function MapViewContainer() {
             </View>
           )}
         </TouchableOpacity>
+        {/* ★ Botón Instituciones */}
+        <TouchableOpacity
+          style={[styles.squareActionBtn, { backgroundColor: "#f59e0b" }, showingInstitucionesOverlay && { borderWidth: 2, borderColor: "#fff" }]}
+          onPress={() => {
+            setShowingInstitucionesOverlay((v) => !v);
+            setPickingFromIsochroneMap(false);
+          }}
+          accessibilityLabel="Instituciones"
+        >
+          <Text style={{ fontSize: 20 }}>🏥</Text>
+        </TouchableOpacity>
       </View>
 
-      {/* ── Columna derecha superior ──────────────────────────────────── */}
       <View style={styles.topRightGroup} pointerEvents="box-none">
         <TouchableOpacity style={styles.squareButton} onPress={() => setShowMapTypePicker(true)}>
           <MaterialIcons name="layers" size={24} color="#073b4c" />
@@ -651,67 +903,90 @@ export default function MapViewContainer() {
           style={[
             styles.squareButton,
             showIsochroneOverlay && { backgroundColor: "#10b981" },
-            !isoTable && { opacity: 0.4 },
+            isoComputing && { backgroundColor: "#fef3c7" },
           ]}
-          onPress={() => {
-            if (!isoTable) {
-              Alert.alert("Isócronas no disponibles", "Selecciona un tipo de emergencia para ver el mapa de tiempo a seguridad.");
-              return;
-            }
-            setShowIsochroneOverlay((v) => !v);
-          }}
+          onPress={handleIsochroneButton}
         >
-          <MaterialIcons name="timer" size={24} color={showIsochroneOverlay ? "#ffffff" : "#073b4c"} />
+          {isoComputing ? (
+            <ActivityIndicator size="small" color="#d97706" />
+          ) : (
+            <MaterialIcons name="timer" size={24} color={showIsochroneOverlay ? "#ffffff" : "#073b4c"} />
+          )}
         </TouchableOpacity>
         <View style={styles.roundButton}>
           <NorthArrow heading={heading} />
         </View>
       </View>
 
-      {/* ── BANNERS ─────────────────────────────────────────────────── */}
-      {evacuando && routeCoords.length > 0 && (
-        <View style={styles.evacuandoBanner}>
-          <Text style={styles.evacuandoText}>🚨 Evacuando</Text>
-        </View>
-      )}
-      {rutaSugerida && !evacuando && (
-        <View style={[styles.evacuandoBanner, { backgroundColor: "#118ab2" }]}>
-          <Text style={styles.evacuandoText}>🧭 Ruta sugerida</Text>
-        </View>
-      )}
-      {isCalculating && !evacuando && (
-        <View style={[styles.evacuandoBanner, { backgroundColor: "#6366f1" }]}>
-          <ActivityIndicator size="small" color="#fff" style={{ marginRight: 6 }} />
-          <Text style={styles.evacuandoText}>Calculando ruta...</Text>
-        </View>
-      )}
-      {(evacuando || rutaSugerida) && resumenRuta && destinoFinal && (
-        <View style={styles.resumenBanner}>
-          <Text style={styles.resumenText}>
-            {iconoModo} {resumenRuta.distancia} · ⏱️ {resumenRuta.tiempo}
-          </Text>
-          <Text style={styles.resumenSub} numberOfLines={1}>→ {destinoFinal.nombre}</Text>
-        </View>
-      )}
-      {!evacuando && !rutaSugerida && userIsochroneQuery && emergencyType !== "ninguna" && (
-        <View style={styles.isochroneInfoBanner}>
-          <Text style={styles.isochroneInfoTitle}>⏱️ Tiempo a seguridad</Text>
-          <Text style={styles.isochroneInfoTime}>{Math.round(userIsochroneQuery.timeSeconds / 60)} min</Text>
-          <Text style={styles.isochroneInfoDest} numberOfLines={1}>→ {userIsochroneQuery.destName}</Text>
+      {mostrarIsocronas && (
+        <View style={styles.legendPosition} pointerEvents="none">
+          <IsochroneLegend />
         </View>
       )}
 
-      {/* ── MAPA ──────────────────────────────────────────────────── */}
+      {/* Stack de banners superiores. Todos comparten esta columna y se
+          apilan con gap en vez de competir por el mismo `top`. */}
+      <View style={styles.topBannersStack} pointerEvents="box-none">
+        {pickingFromIsochroneMap && (
+          <View style={styles.pickingBanner}>
+            <MaterialIcons name="touch-app" size={18} color="#fff" />
+            <Text style={styles.pickingBannerText}>
+              Toca un refugio en el mapa para elegirlo
+            </Text>
+          </View>
+        )}
+        {showingInstitucionesOverlay && (
+          <View style={[styles.pickingBanner, { backgroundColor: "#f59e0b" }]}>
+            <MaterialIcons name="local-hospital" size={18} color="#fff" />
+            <Text style={styles.pickingBannerText}>
+              Instituciones cercanas · toca una para verla
+            </Text>
+          </View>
+        )}
+        {evacuando && routeCoords.length > 0 && (
+          <View style={styles.evacuandoBanner}>
+            <Text style={styles.evacuandoText}>🚨 Evacuando</Text>
+          </View>
+        )}
+        {rutaSugerida && !evacuando && (
+          <View style={[styles.evacuandoBanner, { backgroundColor: "#118ab2" }]}>
+            <Text style={styles.evacuandoText}>🧭 Ruta sugerida</Text>
+          </View>
+        )}
+        {isCalculating && !evacuando && (
+          <View style={[styles.evacuandoBanner, { backgroundColor: "#6366f1" }]}>
+            <ActivityIndicator size="small" color="#fff" style={{ marginRight: 6 }} />
+            <Text style={styles.evacuandoText}>Calculando ruta...</Text>
+          </View>
+        )}
+        {(evacuando || rutaSugerida) && resumenRuta && destinoFinal && (
+          <View style={styles.resumenBanner}>
+            <Text style={styles.resumenText}>
+              {iconoModo} {resumenRuta.distancia} · ⏱️ {resumenRuta.tiempo}
+            </Text>
+            <Text style={styles.resumenSub} numberOfLines={1}>→ {destinoFinal.nombre}</Text>
+          </View>
+        )}
+        {!evacuando && !rutaSugerida && !pickingFromIsochroneMap && userIsochroneQuery && emergencyType !== "ninguna" && (
+          <View style={styles.isochroneInfoBanner}>
+            <Text style={styles.isochroneInfoTitle}>⏱️ Tiempo a seguridad</Text>
+            <Text style={styles.isochroneInfoTime}>{Math.round(userIsochroneQuery.timeSeconds / 60)} min</Text>
+            <Text style={styles.isochroneInfoDest} numberOfLines={1}>→ {userIsochroneQuery.destName}</Text>
+          </View>
+        )}
+      </View>
+
       <MapView
         ref={mapRef}
         style={styles.map}
         mapType={mapType}
         showsCompass={false}
         showsMyLocationButton={false}
-        initialRegion={{ latitude: 4.8767129, longitude: -75.627213, latitudeDelta: 0.007, longitudeDelta: 0.007 }}
+        initialRegion={initialRegion}
         showsUserLocation
         onPress={(e) => {
           if (startMode !== "manual" || evacuando) return;
+          if (pickingFromIsochroneMap || showingInstitucionesOverlay) return;
           const { latitude, longitude } = e.nativeEvent.coordinate;
           setStartPoint({ lat: latitude, lng: longitude });
         }}
@@ -741,43 +1016,59 @@ export default function MapViewContainer() {
 
         {mostrarIsocronas && isoTable && <IsochroneOverlay graph={getGraph()} table={isoTable} />}
 
-        {/* Destino principal — tappable para ver ficha del refugio */}
-        {destinoFinal && (
+        {/* Destinos: uno solo, o todos cuando picking */}
+        {destinosToShow.map((d) => (
           <Marker
-            coordinate={{ latitude: destinoFinal.lat, longitude: destinoFinal.lng }}
-            title={destinoFinal.nombre}
-            pinColor="azure"
-            onPress={() => handleOpenRefugeDetails(destinoFinal.nombre)}
+            key={`dest-${d.nombre}`}
+            coordinate={{ latitude: d.lat, longitude: d.lng }}
+            title={d.nombre}
+            pinColor={pickingFromIsochroneMap ? "green" : "azure"}
+            stopPropagation
+            onPress={(e) => { e.stopPropagation?.(); handleDestinationMarkerPress(d); }}
           />
-        )}
+        ))}
+
+        {/* Instituciones cuando el overlay está activo */}
+        {showingInstitucionesOverlay && instituciones.map((inst, i) => (
+          <Marker
+            key={`inst-${i}-${inst.nombre}`}
+            coordinate={{ latitude: inst.lat, longitude: inst.lng }}
+            title={inst.nombre}
+            description={inst.tipo}
+            pinColor="gold"
+            stopPropagation
+            onPress={(e) => { e.stopPropagation?.(); handleInstitucionMarkerPress(inst); }}
+          />
+        ))}
 
         {startMode === "manual" && startPoint && (
           <Marker
             coordinate={{ latitude: startPoint.lat, longitude: startPoint.lng }}
             title="Punto inicial"
             pinColor="orange"
+            stopPropagation
           />
         )}
 
-        {/* Alertas ciudadanas */}
         {blockingAlerts.map((alert) => (
           <Marker
             key={alert.id}
             coordinate={{ latitude: alert.lat, longitude: alert.lng }}
             title={labelForAlertType(alert.type)}
-            description={`${alert.uniqueDeviceCount} ciudadano(s) · ${Math.round(alert.confidence * 100)}% confianza`}
+            description={`${alert.uniqueDeviceCount} ciudadano(s) · ${Math.round(alert.confidence * 100)}%`}
             pinColor="red"
+            stopPropagation
           />
         ))}
 
-        {/* Personas desaparecidas — marker circular distintivo */}
         {missingPersons.map((p) => (
           <Marker
             key={`missing-${p.id}`}
             coordinate={{ latitude: p.lastSeenLat, longitude: p.lastSeenLng }}
-            title={`🔍 ${p.name} · desaparecido/a`}
+            title={`🔍 ${p.name}`}
             description={p.description.substring(0, 80)}
-            onPress={() => setMissingModalVisible(true)}
+            stopPropagation
+            onPress={(e) => { e.stopPropagation?.(); setMissingModalVisible(true); }}
           >
             <View style={styles.missingMarker}>
               <Text style={{ fontSize: 16 }}>🔍</Text>
@@ -785,18 +1076,16 @@ export default function MapViewContainer() {
           </Marker>
         ))}
 
-        {/* Miembros del grupo familiar con ubicación */}
         {familyMembersWithLocation.map((m) => (
           <Marker
             key={`family-${m.deviceId}`}
             coordinate={{ latitude: m.lat, longitude: m.lng }}
             title={`👨‍👩‍👧 ${m.name}`}
             description={m.groupName}
+            stopPropagation
           >
             <View style={styles.familyMarker}>
-              <Text style={styles.familyMarkerText}>
-                {m.name.substring(0, 1).toUpperCase()}
-              </Text>
+              <Text style={styles.familyMarkerText}>{m.name.substring(0, 1).toUpperCase()}</Text>
             </View>
           </Marker>
         ))}
@@ -811,6 +1100,7 @@ export default function MapViewContainer() {
               coordinate={{ latitude: lat, longitude: lng }}
               title={name}
               description={poi.properties.category_ids ? Object.values(poi.properties.category_ids)[0]?.category_name : ""}
+              stopPropagation
             >
               <View style={{ backgroundColor: icon.color, borderRadius: 20, padding: 4, borderWidth: 2, borderColor: "#fff" }}>
                 <Text style={{ fontSize: 16 }}>{icon.label}</Text>
@@ -820,20 +1110,22 @@ export default function MapViewContainer() {
         })}
       </MapView>
 
-      {/* ── Columna derecha inferior ──────────────────────────────────── */}
+      {/* ★ ISSUE 4 FIX: botones Ir aquí + Street View visibles apenas hay destino */}
       <View style={styles.bottomRightGroup} pointerEvents="box-none">
-        {(evacuando || rutaSugerida) && destinoFinal && (
+        {destinoFinal && !pickingFromIsochroneMap && !showingInstitucionesOverlay && (
           <TouchableOpacity
             style={[styles.bottomRightBtn, { backgroundColor: "#6366f1" }]}
             onPress={() => setStreetViewVisible(true)}
+            accessibilityLabel="Ver Street View 360"
           >
             <MaterialIcons name="streetview" size={22} color="#fff" />
           </TouchableOpacity>
         )}
-        {(evacuando || rutaSugerida) && destinoFinal && (
+        {destinoFinal && !pickingFromIsochroneMap && !showingInstitucionesOverlay && (
           <TouchableOpacity
             style={[styles.bottomRightBtn, { backgroundColor: "#3b82f6" }]}
             onPress={handleOpenGoogleMaps}
+            accessibilityLabel="Abrir en Google Maps"
           >
             <MaterialIcons name="map" size={22} color="#fff" />
           </TouchableOpacity>
@@ -855,7 +1147,6 @@ export default function MapViewContainer() {
         <MaterialIcons name="phone" size={28} color="#ffffff" />
       </TouchableOpacity>
 
-      {/* ── MODALES ───────────────────────────────────────────────── */}
       <Modal visible={showMapTypePicker} transparent animationType="slide" onRequestClose={() => setShowMapTypePicker(false)}>
         <TouchableWithoutFeedback onPress={() => setShowMapTypePicker(false)}>
           <View style={styles.modalOverlay}>
@@ -920,12 +1211,8 @@ export default function MapViewContainer() {
         visible={refugeDetailsVisible}
         onClose={() => setRefugeDetailsVisible(false)}
         refuge={refugeDetailsData}
-        onNavigate={refugeDetailsData ? () => {
-          // Ya tenemos destino seleccionado — no hace falta re-setear nada
-        } : undefined}
-        onStreetView={refugeDetailsData ? () => {
-          setStreetViewVisible(true);
-        } : undefined}
+        onNavigate={refugeDetailsData ? handleNavigateFromRefuge : undefined}
+        onStreetView={refugeDetailsData ? () => setStreetViewVisible(true) : undefined}
       />
 
       {destinoFinal && (
@@ -938,8 +1225,7 @@ export default function MapViewContainer() {
         />
       )}
 
-      {/* ── Banners de ayuda ─────────────────────────────────────── */}
-      {seleccionandoPunto && startPoint === null && (
+      {seleccionandoPunto && startPoint === null && !pickingFromIsochroneMap && !showingInstitucionesOverlay && (
         <View style={styles.floatingBanner}>
           <Text style={styles.floatingBannerText}>Toca el mapa para seleccionar tu punto de inicio</Text>
         </View>
@@ -959,7 +1245,8 @@ export default function MapViewContainer() {
         </TouchableOpacity>
       )}
 
-      {mostrarBotonIniciar && (
+      {/* ★ BOTÓN IR AQUÍ — aparece apenas hay destino */}
+      {mostrarBotonIrAqui && (
         <Animated.View
           style={{
             transform: [{ scale: resaltarIniciar ? pulseAnim : 1 }],
@@ -972,7 +1259,7 @@ export default function MapViewContainer() {
               resaltarIniciar && styles.evacuarButtonResaltado,
               isCalculating && { opacity: 0.7 },
             ]}
-            onPress={iniciarEvacuacion}
+            onPress={handleIrAqui}
             disabled={isCalculating}
           >
             {isCalculating ? (
@@ -981,7 +1268,7 @@ export default function MapViewContainer() {
               <MaterialIcons name="directions-run" size={22} color="#ffffff" style={{ marginRight: 8 }} />
             )}
             <Text style={styles.evacuarButtonText}>
-              {isCalculating ? "CALCULANDO..." : "COMENZAR EVACUACIÓN"}
+              {isCalculating ? "CALCULANDO..." : "IR AQUÍ"}
             </Text>
           </TouchableOpacity>
         </Animated.View>
@@ -1062,15 +1349,24 @@ const styles = StyleSheet.create({
     alignItems: "center", justifyContent: "center",
     shadowColor: "#ef476f", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 8, elevation: 8,
   },
+  topBannersStack: {
+    position: "absolute", top: 170, left: 0, right: 0, zIndex: 10,
+    alignItems: "center", gap: 8,
+  },
+  pickingBanner: {
+    backgroundColor: "#10b981",
+    paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20,
+    flexDirection: "row", alignItems: "center", gap: 8,
+    elevation: 8, shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 8,
+  },
+  pickingBannerText: { color: "#fff", fontWeight: "700", fontSize: 13 },
   evacuandoBanner: {
-    position: "absolute", top: 176, alignSelf: "center", zIndex: 10,
     backgroundColor: "#073b4c", paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20,
     flexDirection: "row", alignItems: "center", justifyContent: "center",
     shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 8, elevation: 8,
   },
   evacuandoText: { color: "#ffffff", fontWeight: "700", fontSize: 14, includeFontPadding: false },
   resumenBanner: {
-    position: "absolute", top: 224, alignSelf: "center", zIndex: 10,
     backgroundColor: "#ffffffee", paddingHorizontal: 20, paddingVertical: 8, borderRadius: 20,
     elevation: 5, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15, shadowRadius: 4,
     alignItems: "center", maxWidth: "70%",
@@ -1078,7 +1374,6 @@ const styles = StyleSheet.create({
   resumenText: { color: "#073b4c", fontWeight: "700", fontSize: 13, includeFontPadding: false },
   resumenSub: { color: "#6b7280", fontSize: 11, marginTop: 2 },
   isochroneInfoBanner: {
-    position: "absolute", top: 224, alignSelf: "center", zIndex: 10,
     backgroundColor: "rgba(255,255,255,0.95)",
     paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12,
     elevation: 5, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15, shadowRadius: 4,
@@ -1087,17 +1382,16 @@ const styles = StyleSheet.create({
   isochroneInfoTitle: { color: "#374151", fontSize: 11, fontWeight: "600" },
   isochroneInfoTime: { color: "#10b981", fontSize: 20, fontWeight: "800", marginTop: 2 },
   isochroneInfoDest: { color: "#6b7280", fontSize: 11, marginTop: 2, maxWidth: 200 },
+  legendPosition: { position: "absolute", right: 20, top: 420, zIndex: 10 },
   missingMarker: {
-    backgroundColor: "#fbbf24",
-    borderRadius: 18,
+    backgroundColor: "#fbbf24", borderRadius: 18,
     width: 36, height: 36,
     justifyContent: "center", alignItems: "center",
     borderWidth: 3, borderColor: "#fff",
     shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3,
   },
   familyMarker: {
-    backgroundColor: "#7c3aed",
-    borderRadius: 18,
+    backgroundColor: "#7c3aed", borderRadius: 18,
     width: 36, height: 36,
     justifyContent: "center", alignItems: "center",
     borderWidth: 3, borderColor: "#fff",

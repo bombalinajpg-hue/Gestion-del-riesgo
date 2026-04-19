@@ -1,31 +1,19 @@
 /**
  * Snap de un punto arbitrario (lat/lng) al nodo más cercano del grafo.
  *
- * VERSIÓN OPTIMIZADA: indexación espacial tipo bucket grid para
- * reducir la búsqueda de O(n) a O(1) amortizado.
- *
- * Cómo funciona:
- *   - Al cargar el grafo por primera vez, dividimos el bbox en celdas
- *     de ~100m × 100m. En cada celda guardamos los índices de nodos
- *     que caen en ella.
- *   - Al hacer snap de un punto, solo buscamos en la celda del punto
- *     + sus 8 vecinas. Típicamente son <30 nodos por celda vs miles
- *     en el grafo completo.
- *
- * Si el punto está fuera del bbox del grafo, caemos a la búsqueda
- * lineal para asegurar resultado.
+ * Indexación espacial tipo bucket grid: búsqueda O(1) amortizada.
+ * Al cargar el grafo por primera vez, dividimos el bbox en celdas
+ * de ~100m × 100m. En cada celda guardamos los índices de nodos
+ * que caen en ella. Al hacer snap solo buscamos en la celda del
+ * punto + vecinas.
  */
 
 import type { Graph } from '../types/graph';
 
-// ─── Cache del índice espacial ─────────────────────────────────────────────
-// Se reconstruye si cambia la referencia del grafo (por ejemplo si se
-// recarga desde otra fuente).
-
 interface SpatialIndex {
   graphRef: Graph;
-  cellSize: number; // en grados
-  cells: Map<string, number[]>; // clave "row,col" → índices de nodo
+  cellSize: number;
+  cells: Map<string, number[]>;
   minLat: number;
   minLng: number;
   rows: number;
@@ -63,17 +51,12 @@ function getOrBuildIndex(graph: Graph): SpatialIndex {
   return cached;
 }
 
-// Haversine rápida — suficientemente precisa para snap a escala urbana
 function fastDistance(aLat: number, aLng: number, bLat: number, bLng: number): number {
   const dLat = (bLat - aLat) * 111_000;
   const dLng = (bLng - aLng) * 111_000 * Math.cos((aLat * Math.PI) / 180);
   return Math.sqrt(dLat * dLat + dLng * dLng);
 }
 
-/**
- * Devuelve el índice del nodo más cercano en el grafo. `null` si el
- * grafo está vacío (no debería ocurrir en uso normal).
- */
 export function snapToNearestNode(
   lat: number,
   lng: number,
@@ -90,11 +73,9 @@ export function snapToNearestNode(
   let bestNode: number | null = null;
   let bestDist = Infinity;
 
-  // Buscamos en celda + vecinas, expandiendo radio si no hay candidatos.
   for (let ring = 0; ring <= 3; ring++) {
     for (let dr = -ring; dr <= ring; dr++) {
       for (let dc = -ring; dc <= ring; dc++) {
-        // Solo las celdas del ring actual (para no repetir las internas)
         if (ring > 0 && Math.abs(dr) !== ring && Math.abs(dc) !== ring) continue;
         const key = `${r + dr},${c + dc}`;
         const bucket = cells.get(key);
@@ -106,11 +87,9 @@ export function snapToNearestNode(
         }
       }
     }
-    // Si ya encontramos algo en este anillo, no hace falta expandir más
     if (bestNode !== null && ring >= 1) return bestNode;
   }
 
-  // Fallback lineal — punto muy lejos del grafo
   if (bestNode === null) {
     for (let i = 0; i < graph.nodes.length; i++) {
       const n = graph.nodes[i];
@@ -121,7 +100,14 @@ export function snapToNearestNode(
   return bestNode;
 }
 
-/** Invalida el índice manualmente (ej. si se reemplaza el grafo en runtime) */
 export function invalidateSnapIndex(): void {
   cached = null;
+}
+
+/**
+ * Pre-construye el índice espacial. Llamar una vez tras `loadGraph`
+ * para que el primer `snapToNearestNode` no pague el costo de construcción.
+ */
+export function prewarmSnapIndex(graph: Graph): void {
+  getOrBuildIndex(graph);
 }

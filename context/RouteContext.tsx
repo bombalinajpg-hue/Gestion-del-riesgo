@@ -3,46 +3,31 @@ import { Feature, FeatureCollection, Geometry } from "geojson";
 import React, { createContext, useContext, useEffect, useState } from "react";
 import rawblockedRoutesJson from "../data/blockedRoutes.json";
 import {
+  Destino,
   EmergencyType,
+  Institucion,
   RouteProfile,
   StartMode,
   StartPoint,
 } from "../src/types/types";
 
-type DestinationMode = "selected" | "closest";
+type DestinationMode = "manual" | "closest";
 
 const rawblockedRoutes = rawblockedRoutesJson as FeatureCollection<
   Geometry,
   { [key: string]: any }
 >;
 
-interface Destination {
-  id: number;
-  nombre: string;
-  tipo: string;
-  lat: number;
-  lng: number;
-}
-
-interface Institucion {
-  id: number;
-  nombre: string;
-  tipo: string;
-  lat: number;
-  lng: number;
-}
-
 interface RouteContextType {
-  // ✅ FIX 6 y 7: RouteProfile y StartMode pueden ser null (sin preselección)
   routeProfile: RouteProfile;
   setRouteProfile: React.Dispatch<React.SetStateAction<RouteProfile>>;
   startMode: StartMode;
   setStartMode: React.Dispatch<React.SetStateAction<StartMode>>;
   startPoint: StartPoint | null;
   setStartPoint: React.Dispatch<React.SetStateAction<StartPoint | null>>;
-  selectedDestination: Destination | null;
+  selectedDestination: Destino | null;
   setSelectedDestination: React.Dispatch<
-    React.SetStateAction<Destination | null>
+    React.SetStateAction<Destino | null>
   >;
   selectedInstitucion: Institucion | null;
   setSelectedInstitucion: React.Dispatch<
@@ -56,11 +41,16 @@ interface RouteContextType {
   setDestinationMode: React.Dispatch<React.SetStateAction<DestinationMode>>;
   shouldCenterOnUser: boolean;
   setShouldCenterOnUser: React.Dispatch<React.SetStateAction<boolean>>;
-  // ✅ FIX 4: señal para que MainMenu haga scroll a la sección de destinos
   shouldScrollToDestinos: boolean;
   setShouldScrollToDestinos: React.Dispatch<React.SetStateAction<boolean>>;
   instructivoTrigger: number;
   requestShowInstructivo: () => void;
+  // ★ v4.2: modo "elegir destino desde el mapa con isócronas"
+  pickingFromIsochroneMap: boolean;
+  setPickingFromIsochroneMap: React.Dispatch<React.SetStateAction<boolean>>;
+  // ★ v4.2: mostrar instituciones como overlay en el mapa
+  showingInstitucionesOverlay: boolean;
+  setShowingInstitucionesOverlay: React.Dispatch<React.SetStateAction<boolean>>;
 }
 
 const RouteContext = createContext<RouteContextType | undefined>(undefined);
@@ -68,19 +58,17 @@ const RouteContext = createContext<RouteContextType | undefined>(undefined);
 export const RouteProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
-  // ✅ FIX 6 y 7: inician en null → sin preselección
   const [routeProfile, setRouteProfile] =
     useState<RouteProfile>("foot-walking");
   const [startMode, setStartMode] = useState<StartMode>("gps");
   const [selectedDestination, setSelectedDestination] =
-    useState<Destination | null>(null);
+    useState<Destino | null>(null);
   const [selectedInstitucion, setSelectedInstitucion] =
     useState<Institucion | null>(null);
   const [emergencyType, setEmergencyType] = useState<EmergencyType>("ninguna");
   const [startPoint, setStartPoint] = useState<StartPoint | null>(null);
-  const [destinationMode, setDestinationMode] = useState<"manual" | "closest">(
-    "closest",
-  );
+  const [destinationMode, setDestinationMode] =
+    useState<DestinationMode>("closest");
   const [shouldCenterOnUser, setShouldCenterOnUser] = useState(false);
   const [shouldScrollToDestinos, setShouldScrollToDestinos] = useState(false);
   const [instructivoTrigger, setInstructivoTrigger] = useState(0);
@@ -89,12 +77,13 @@ export const RouteProvider: React.FC<{ children: React.ReactNode }> = ({
     type: "FeatureCollection",
     features: [],
   });
+  const [pickingFromIsochroneMap, setPickingFromIsochroneMap] = useState(false);
+  const [showingInstitucionesOverlay, setShowingInstitucionesOverlay] = useState(false);
 
   useEffect(() => {
     setBlockedRoutes(rawblockedRoutes as FeatureCollection);
   }, []);
 
-  // ✅ FIX 1: cuando emergencyType cambia a 'ninguna', limpia blockedRoutes → limpia polígonos
   useEffect(() => {
     if (emergencyType === "ninguna") {
       setBlockedRoutes({ type: "FeatureCollection", features: [] });
@@ -124,12 +113,18 @@ export const RouteProvider: React.FC<{ children: React.ReactNode }> = ({
         setEmergencyType,
         blockedRoutes,
         setBlockedRoutes,
+        destinationMode,
+        setDestinationMode,
         shouldCenterOnUser,
         setShouldCenterOnUser,
         shouldScrollToDestinos,
         setShouldScrollToDestinos,
         instructivoTrigger,
         requestShowInstructivo,
+        pickingFromIsochroneMap,
+        setPickingFromIsochroneMap,
+        showingInstitucionesOverlay,
+        setShowingInstitucionesOverlay,
       }}
     >
       {children}

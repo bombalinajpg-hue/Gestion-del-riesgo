@@ -1,24 +1,23 @@
 /**
- * StreetViewModal — vista panorámica embebida con Google Maps Embed API.
+ * StreetViewModal v4.1 — arregla pantalla negra usando un wrapper HTML.
  *
- * Usa la URL oficial https://www.google.com/maps/embed/v1/streetview
- * que SÍ está diseñada para renderizarse dentro de un iframe/WebView.
- * Requiere una API key de Google Maps Platform (free tier: 10k requests/mes
- * para Embed API, suficiente para cualquier uso de esta app).
+ * El problema con v4 (src={uri} directo): la WebView de React Native no da
+ * al iframe de Google el contexto HTML que necesita para renderizar el
+ * panorama WebGL. Carga la URL pero el canvas de Street View queda negro.
  *
- * Setup:
- *   1. Crear API key en https://console.cloud.google.com/google/maps-apis
- *   2. Habilitar "Maps Embed API" en el proyecto
- *   3. Agregar la key como variable de entorno:
- *        .env → EXPO_PUBLIC_GOOGLE_MAPS_API_KEY=AIza...
- *   4. Reiniciar Expo: `npx expo start --clear`
+ * Solución: cargamos una página HTML nuestra con source={{html}} que
+ * embebe el iframe con los atributos `allow` correctos. La WebView
+ * renderiza la página HTML completa, que a su vez renderiza el iframe
+ * de Google con permisos para giroscopio/acelerómetro/fullscreen.
  *
- * Si la key no está configurada, el modal muestra un estado de fallback
- * con un botón para abrir Google Maps externo.
+ * Además:
+ *   - Timeout de 10s: si no carga, ofrece abrir externo
+ *   - Botón "abrir externo" siempre visible en el header
+ *   - Mensaje informativo sobre cobertura limitada en zonas rurales
  */
 
 import { MaterialIcons } from '@expo/vector-icons';
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Linking,
@@ -49,23 +48,60 @@ export default function StreetViewModal({
   placeName,
 }: Props) {
   const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState(false);
+  const [timedOut, setTimedOut] = useState(false);
+  const timerRef = useRef<any>(null);
 
   const openExternal = () => {
     const url = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${latitude},${longitude}`;
-    Linking.openURL(url).catch(() => { /* noop */ });
+    Linking.openURL(url).catch(() => {});
   };
 
-  const handleShow = () => {
+  // Reset al abrir y empezar el timer de "no carga"
+  useEffect(() => {
+    if (!visible) {
+      if (timerRef.current) clearTimeout(timerRef.current);
+      return;
+    }
     setLoading(true);
-    setLoadError(false);
-  };
+    setTimedOut(false);
+    // Si a los 10s seguimos cargando, mostrar fallback
+    timerRef.current = setTimeout(() => {
+      setTimedOut(true);
+      setLoading(false);
+    }, 10_000);
+    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+  }, [visible, latitude, longitude]);
 
-  const embedUrl = API_KEY
-    ? `https://www.google.com/maps/embed/v1/streetview?key=${API_KEY}` +
+  // HTML que envuelve el iframe. Esto es lo que arregla la pantalla negra.
+  const html = useMemo(() => {
+    if (!API_KEY) return null;
+    const src =
+      `https://www.google.com/maps/embed/v1/streetview?key=${API_KEY}` +
       `&location=${latitude},${longitude}` +
-      `&heading=0&pitch=0&fov=90`
-    : null;
+      `&heading=0&pitch=0&fov=90`;
+    return `
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
+  iframe { width: 100%; height: 100%; border: 0; display: block; }
+</style>
+</head>
+<body>
+<iframe
+  src="${src}"
+  allow="accelerometer; gyroscope; fullscreen"
+  allowfullscreen
+  frameborder="0"
+  loading="eager"
+></iframe>
+</body>
+</html>`;
+  }, [latitude, longitude]);
 
   return (
     <Modal
@@ -73,7 +109,6 @@ export default function StreetViewModal({
       animationType="slide"
       presentationStyle="fullScreen"
       onRequestClose={onClose}
-      onShow={handleShow}
     >
       <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
         {/* Header */}
@@ -92,61 +127,74 @@ export default function StreetViewModal({
           </TouchableOpacity>
         </View>
 
-        {/* WebView o fallback */}
         <View style={styles.webviewContainer}>
-          {!embedUrl ? (
-            // Sin API key → fallback directo
-            <View style={styles.errorOverlay}>
+          {/* Caso 1: sin API key → fallback directo */}
+          {!html ? (
+            <View style={styles.messageOverlay}>
               <MaterialIcons name="vpn-key" size={48} color="#6b7280" />
-              <Text style={styles.errorTitle}>Street View no configurado</Text>
-              <Text style={styles.errorDetail}>
-                Para ver la vista 360° embebida en la app, configura una API
-                key de Google Maps (gratis, 10.000 consultas/mes). Mientras
-                tanto, puedes abrir Google Maps en una ventana externa.
+              <Text style={styles.messageTitle}>Street View no configurado</Text>
+              <Text style={styles.messageDetail}>
+                Configura una API key de Google Maps (gratis, 10.000 cargas/mes)
+                en el archivo .env como EXPO_PUBLIC_GOOGLE_MAPS_API_KEY.
               </Text>
-              <TouchableOpacity style={styles.errorButton} onPress={openExternal}>
+              <TouchableOpacity style={styles.messageButton} onPress={openExternal}>
                 <MaterialIcons name="open-in-new" size={18} color="#ffffff" />
-                <Text style={styles.errorButtonText}>Abrir en Google Maps</Text>
+                <Text style={styles.messageButtonText}>Abrir en Google Maps</Text>
               </TouchableOpacity>
             </View>
-          ) : !loadError ? (
+          ) : timedOut ? (
+            /* Caso 2: timeout de 10s → cobertura probablemente inexistente */
+            <View style={styles.messageOverlay}>
+              <MaterialIcons name="visibility-off" size={48} color="#6b7280" />
+              <Text style={styles.messageTitle}>Sin cobertura aquí</Text>
+              <Text style={styles.messageDetail}>
+                Google Street View no tiene imágenes panorámicas en esta
+                ubicación específica. En zonas rurales o calles secundarias
+                la cobertura puede ser limitada.
+              </Text>
+              <TouchableOpacity style={styles.messageButton} onPress={openExternal}>
+                <MaterialIcons name="map" size={18} color="#ffffff" />
+                <Text style={styles.messageButtonText}>Abrir en Google Maps</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            /* Caso 3: normal — WebView con HTML que contiene el iframe */
             <WebView
-              source={{ uri: embedUrl }}
+              source={{ html }}
               style={styles.webview}
-              startInLoadingState
-              scalesPageToFit
-              allowsInlineMediaPlayback
-              mediaPlaybackRequiresUserAction={false}
+              originWhitelist={['https://*.google.com', 'https://*.googleapis.com', 'https://*.gstatic.com']}
               javaScriptEnabled
               domStorageEnabled
-              onLoadEnd={() => setLoading(false)}
-              onError={() => { setLoadError(true); setLoading(false); }}
-              onHttpError={() => { setLoadError(true); setLoading(false); }}
+              allowsInlineMediaPlayback
+              mediaPlaybackRequiresUserAction={false}
+              mixedContentMode="compatibility"
+              setSupportMultipleWindows={false}
+              onLoadEnd={() => {
+                setLoading(false);
+                if (timerRef.current) clearTimeout(timerRef.current);
+              }}
+              onError={() => {
+                setTimedOut(true);
+                setLoading(false);
+              }}
+              onHttpError={() => {
+                setTimedOut(true);
+                setLoading(false);
+              }}
             />
-          ) : (
-            <View style={styles.errorOverlay}>
-              <MaterialIcons name="error-outline" size={48} color="#6b7280" />
-              <Text style={styles.errorTitle}>No se pudo cargar la vista</Text>
-              <Text style={styles.errorDetail}>
-                Puede ser que no haya cobertura de Street View en este punto
-                o que la API key esté restringida. Verifica en Google Cloud
-                Console que "Maps Embed API" esté habilitada.
-              </Text>
-              <TouchableOpacity style={styles.errorButton} onPress={openExternal}>
-                <MaterialIcons name="open-in-new" size={18} color="#ffffff" />
-                <Text style={styles.errorButtonText}>Abrir en Google Maps</Text>
-              </TouchableOpacity>
-            </View>
           )}
 
-          {loading && embedUrl && !loadError && (
-            <View style={styles.loadingOverlay}>
+          {/* Loading overlay */}
+          {loading && html && !timedOut && (
+            <View style={styles.loadingOverlay} pointerEvents="none">
               <ActivityIndicator size="large" color="#3b82f6" />
               <Text style={styles.loadingText}>Cargando vista panorámica...</Text>
+              <Text style={styles.loadingHint}>Puede tardar unos segundos</Text>
             </View>
           )}
         </View>
 
+        {/* Footer con hint */}
         <View style={styles.footer}>
           <MaterialIcons name="info-outline" size={14} color="#9ca3af" />
           <Text style={styles.footerText}>
@@ -172,41 +220,38 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.12)',
     justifyContent: 'center', alignItems: 'center',
   },
-  headerTitle: { color: '#ffffff', fontSize: 15, fontWeight: '700' },
+  headerTitle: { color: '#fff', fontSize: 15, fontWeight: '700' },
   headerSubtitle: { color: '#9ca3af', fontSize: 11, marginTop: 1 },
   webviewContainer: { flex: 1, backgroundColor: '#000' },
   webview: { flex: 1, backgroundColor: '#000' },
   loadingOverlay: {
     ...StyleSheet.absoluteFillObject,
     justifyContent: 'center', alignItems: 'center',
-    backgroundColor: '#111827',
+    backgroundColor: 'rgba(17,24,39,0.8)',
     gap: 12,
   },
-  loadingText: { color: '#9ca3af', fontSize: 13 },
-  errorOverlay: {
+  loadingText: { color: '#fff', fontSize: 14, fontWeight: '600' },
+  loadingHint: { color: '#9ca3af', fontSize: 11 },
+  messageOverlay: {
     ...StyleSheet.absoluteFillObject,
     justifyContent: 'center', alignItems: 'center',
-    backgroundColor: '#1f2937',
-    paddingHorizontal: 32,
-    gap: 8,
+    backgroundColor: '#1f2937', paddingHorizontal: 32, gap: 8,
   },
-  errorTitle: { color: '#ffffff', fontSize: 16, fontWeight: '700', marginTop: 12 },
-  errorDetail: {
+  messageTitle: { color: '#fff', fontSize: 16, fontWeight: '700', marginTop: 12 },
+  messageDetail: {
     color: '#9ca3af', fontSize: 13,
     textAlign: 'center', marginBottom: 16, lineHeight: 18,
   },
-  errorButton: {
+  messageButton: {
     flexDirection: 'row', alignItems: 'center',
     backgroundColor: '#3b82f6',
     paddingHorizontal: 20, paddingVertical: 12,
     borderRadius: 10, gap: 8,
   },
-  errorButtonText: { color: '#fff', fontWeight: '700', fontSize: 14 },
+  messageButtonText: { color: '#fff', fontWeight: '700', fontSize: 14 },
   footer: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    paddingVertical: 8,
-    backgroundColor: '#111827',
-    gap: 6,
+    paddingVertical: 8, backgroundColor: '#111827', gap: 6,
   },
   footerText: { color: '#9ca3af', fontSize: 11 },
 });

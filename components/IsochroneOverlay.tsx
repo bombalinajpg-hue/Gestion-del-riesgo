@@ -1,92 +1,85 @@
 /**
- * IsochroneOverlay — heatmap de tiempo-a-seguridad basado en Circles.
+ * IsochroneOverlay — dibuja bandas de tiempo hasta el refugio más
+ * cercano como círculos de colores sobre el mapa.
  *
- * Por qué no usamos <Heatmap> nativo: en iOS (Apple Maps, que es lo que
- * usa Expo Go) el componente Heatmap de react-native-maps no está
- * implementado — solo funciona con PROVIDER_GOOGLE, lo cual requiere
- * un dev client con API key de Google Maps.
+ * Recibe el grafo + la tabla de isócronas precomputada. Para cada
+ * nodo, elige el color según el tiempo estimado a seguridad.
  *
- * La alternativa es renderizar un Circle semitransparente por nodo, con
- * color según banda de tiempo. Al solaparse, generan un degradado continuo
- * visualmente indistinguible de un heatmap real.
+ * Decisión de diseño: usamos <Circle> en vez de <Heatmap> porque
+ * react-native-maps Heatmap requiere PROVIDER_GOOGLE + dev client,
+ * no funciona en Expo Go en iOS.
  */
 
-import { useMemo } from "react";
-import { Circle } from "react-native-maps";
-import type { Graph, IsochroneTable } from "../src/types/graph";
-
-// Bandas de tiempo en segundos + color por banda
-const BANDS: { maxSec: number; color: string }[] = [
-  { maxSec: 180, color: "#10b981" }, // ≤3 min — verde
-  { maxSec: 360, color: "#84cc16" }, // ≤6 min — lima
-  { maxSec: 600, color: "#eab308" }, // ≤10 min — amarillo
-  { maxSec: 900, color: "#f97316" }, // ≤15 min — naranja
-  { maxSec: Infinity, color: "#dc2626" }, // >15 min — rojo
-];
-
-function bandColorForTime(seconds: number): string {
-  for (const b of BANDS) if (seconds <= b.maxSec) return b.color;
-  return BANDS[BANDS.length - 1].color;
-}
+import React from 'react';
+import { Circle } from 'react-native-maps';
+import type { Graph, IsochroneTable } from '../src/types/graph';
 
 interface Props {
   graph: Graph;
   table: IsochroneTable;
-  userLocation?: { latitude: number; longitude: number } | null;
-  /**
-   * Densidad: 1 dibuja un círculo por nodo, 2 dibuja la mitad, 3 un tercio,
-   * etc. Más alto = mejor rendimiento, menos detalle. Default 2.
-   */
-  stride?: number;
-  /** Radio en metros por círculo. Mayor = más solapamiento/suavidad. */
-  radiusMeters?: number;
-  /** Alpha (0–255) para el fill; se añade como hex al color. */
-  alphaHex?: string;
 }
 
-export default function IsochroneOverlay({
-  graph,
-  table,
-  stride = 2,
-  radiusMeters = 45,
-  alphaHex = "38", // 0x38 = 56/255 ≈ 22% opacidad
-}: Props) {
-  const circles = useMemo(() => {
-    const out: {
-      key: string;
-      latitude: number;
-      longitude: number;
-      color: string;
-    }[] = [];
-    for (let i = 0; i < table.entries.length; i += stride) {
-      const e = table.entries[i];
-      if (!isFinite(e.timeSeconds)) continue;
-      const node = graph.nodes[i];
-      if (!node) continue;
-      out.push({
-        key: `iso-${i}`,
-        latitude: node.lat,
-        longitude: node.lng,
-        color: bandColorForTime(e.timeSeconds),
-      });
+interface Band {
+  maxSeconds: number;
+  color: string;
+}
+
+const BANDS: Band[] = [
+  { maxSeconds: 180,   color: '#10b981' }, // ≤3 min  verde
+  { maxSeconds: 360,   color: '#84cc16' }, // ≤6 min  lima
+  { maxSeconds: 600,   color: '#eab308' }, // ≤10 min amarillo
+  { maxSeconds: 900,   color: '#f97316' }, // ≤15 min naranja
+  { maxSeconds: Infinity, color: '#dc2626' }, // >15 min rojo
+];
+
+// Para no saturar el mapa renderizamos uno de cada N nodos
+const STRIDE = 2;
+const RADIUS_METERS = 45;
+const ALPHA_HEX = '38'; // ~22% opacidad
+
+function colorForSeconds(sec: number): string {
+  for (const b of BANDS) {
+    if (sec <= b.maxSeconds) return b.color;
+  }
+  return BANDS[BANDS.length - 1].color;
+}
+
+export default function IsochroneOverlay({ graph, table }: Props) {
+  const circles: React.ReactElement[] = [];
+
+  // Extraer valores de la tabla. Soporta ambas estructuras posibles:
+  //   - table.entries[idx] = { timeSeconds, destinationName, ... }
+  //   - table.bestTime[idx] = seconds (formato antiguo)
+  const getSeconds = (i: number): number | null => {
+    const t = table as any;
+    if (t.entries && t.entries[i]) {
+      const e = t.entries[i];
+      if (typeof e === 'number') return isFinite(e) ? e : null;
+      if (e.timeSeconds !== undefined) return isFinite(e.timeSeconds) ? e.timeSeconds : null;
     }
-    return out;
-  }, [graph, table, stride]);
+    if (t.bestTime && t.bestTime[i] !== undefined) {
+      const v = t.bestTime[i];
+      return isFinite(v) ? v : null;
+    }
+    return null;
+  };
 
-  if (circles.length === 0) return null;
+  for (let i = 0; i < graph.nodes.length; i += STRIDE) {
+    const sec = getSeconds(i);
+    if (sec === null) continue;
+    const node = graph.nodes[i];
+    const color = colorForSeconds(sec) + ALPHA_HEX;
+    circles.push(
+      <Circle
+        key={`iso-${i}`}
+        center={{ latitude: node.lat, longitude: node.lng }}
+        radius={RADIUS_METERS}
+        fillColor={color}
+        strokeColor="transparent"
+        strokeWidth={0}
+      />,
+    );
+  }
 
-  return (
-    <>
-      {circles.map((c) => (
-        <Circle
-          key={c.key}
-          center={{ latitude: c.latitude, longitude: c.longitude }}
-          radius={radiusMeters}
-          fillColor={`${c.color}${alphaHex}`}
-          strokeColor="transparent"
-          strokeWidth={0}
-        />
-      ))}
-    </>
-  );
+  return <>{circles}</>;
 }

@@ -1,13 +1,15 @@
 /**
- * Modal de preparación para emergencias.
+ * Modal de preparación para emergencias — v4.1.
  *
- * Cambio en v4: usa SafeAreaView de react-native-safe-area-context en
- * vez de react-native (el nativo está deprecado).
+ * Novedades sobre v4:
+ *   - Alert de celebración cuando el kit llega a 100%
+ *   - Banner verde visible "¡Kit listo!" cuando está completo
  */
 
 import { MaterialIcons } from '@expo/vector-icons';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
+  Alert,
   Modal,
   ScrollView,
   StyleSheet,
@@ -34,21 +36,43 @@ interface Props {
 
 export default function PreparednessModal({ visible, onClose }: Props) {
   const [state, setState] = useState<PreparednessState>({ checkedIds: [] });
+  // Recuerda el porcentaje previo para disparar la celebración solo
+  // cuando el usuario PASA de incompleto a completo (no cada vez que abre).
+  const prevPercentRef = useRef<number>(0);
 
   useEffect(() => {
     if (!visible) return;
     (async () => {
-      setState(await loadPreparedness());
+      const loaded = await loadPreparedness();
+      setState(loaded);
+      prevPercentRef.current = getProgress(loaded).percent;
     })();
   }, [visible]);
 
   const handleToggle = async (itemId: string) => {
     const next = await toggleItem(itemId);
+    const prevPct = prevPercentRef.current;
+    const newPct = getProgress(next).percent;
     setState(next);
+
+    // Celebración al pasar de <1 a 1 (completar el kit)
+    if (prevPct < 1 && newPct === 1) {
+      Alert.alert(
+        '🎉 ¡Kit de emergencia completo!',
+        'Tu kit está 100% preparado. Recuerda:\n\n' +
+          '• Revísalo cada 6 meses\n' +
+          '• Verifica vencimientos de medicamentos y agua\n' +
+          '• Guárdalo en un lugar accesible y conocido por la familia\n\n' +
+          '¡Buen trabajo por tu seguridad!',
+        [{ text: '¡Listo!', style: 'default' }],
+      );
+    }
+    prevPercentRef.current = newPct;
   };
 
   const progress = getProgress(state);
   const isChecked = (id: string) => state.checkedIds.includes(id);
+  const isComplete = progress.percent === 1;
 
   const byCategory = PREPAREDNESS_CATALOG.reduce(
     (acc, item) => {
@@ -75,6 +99,16 @@ export default function PreparednessModal({ visible, onClose }: Props) {
             <MaterialIcons name="close" size={22} color="#374151" />
           </TouchableOpacity>
         </View>
+
+        {/* Banner fijo de kit listo */}
+        {isComplete && (
+          <View style={styles.readyBanner}>
+            <MaterialIcons name="verified" size={22} color="#ffffff" />
+            <Text style={styles.readyBannerText}>
+              ¡Kit listo! Revisa cada 6 meses.
+            </Text>
+          </View>
+        )}
 
         <View style={styles.progressSection}>
           <View style={styles.progressRow}>
@@ -149,6 +183,7 @@ export default function PreparednessModal({ visible, onClose }: Props) {
 }
 
 function colorForProgress(p: number): string {
+  if (p >= 1) return '#059669';
   if (p >= 0.8) return '#10b981';
   if (p >= 0.5) return '#eab308';
   if (p >= 0.25) return '#f97316';
@@ -156,6 +191,7 @@ function colorForProgress(p: number): string {
 }
 
 function messageForProgress(p: number): string {
+  if (p >= 1) return '✓ Tu kit está listo al 100%.';
   if (p >= 0.8) return '¡Excelente! Tu kit está casi completo.';
   if (p >= 0.5) return 'Vas por buen camino. Sigue completando.';
   if (p >= 0.25) return 'Comienza a reunir los elementos esenciales.';
@@ -179,6 +215,20 @@ const styles = StyleSheet.create({
     width: 36, height: 36, borderRadius: 18,
     backgroundColor: '#f3f4f6',
     justifyContent: 'center', alignItems: 'center',
+  },
+  readyBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#059669',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    gap: 8,
+  },
+  readyBannerText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 13,
+    flex: 1,
   },
   progressSection: {
     padding: 16,

@@ -11,7 +11,6 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouteContext } from "../context/RouteContext";
 import destinos from "../data/destinos.json";
-import instituciones from "../data/instituciones.json";
 import { EmergencyType, RouteProfile, StartMode } from "../src/types/types";
 
 // ── Íconos por nombre ──────────────────────────────────────────────────────────
@@ -23,18 +22,6 @@ const iconoPorDestino: Record<string, string> = {
   "Cancha Betania": "⚽",
   "Coliseo Timoteo": "🏟️",
   "Zona Verde 1": "🌿",
-};
-
-const iconoPorInstitucion: Record<string, string> = {
-  "Hospital San Vicente": "🏥",
-  "CAI Betania": "👮",
-  "Parroquia Ntra. Sra. de las Mercedes": "⛪",
-  "Clínica Santa Clara": "🏥",
-  "Parroquia Franciscana Santísima Trinidad": "⛪",
-  "Parroquia San Vicente de Paul": "⛪",
-  "Cruz Roja": "🚑",
-  Bomberos: "🚒",
-  "Escuela La Hermosa": "🏫",
 };
 
 const EMERGENCY_OPTIONS: {
@@ -66,12 +53,6 @@ const LEYENDAS: Record<Exclude<EmergencyType, "ninguna">, LeyendaItem[]> = {
   ],
 };
 
-const ALGORITHM_OPTIONS = [
-  { label: "A* (por defecto)", value: "a-star" },
-  { label: "Dijkstra clásico", value: "dijkstra" },
-  { label: "Sensible al tiempo", value: "time-dependent" },
-];
-
 export default function MainMenu({ navigation }: DrawerContentComponentProps) {
   const insets = useSafeAreaInsets();
   const scrollRef = useRef<ScrollView>(null);
@@ -95,6 +76,8 @@ export default function MainMenu({ navigation }: DrawerContentComponentProps) {
     shouldScrollToDestinos,
     setShouldScrollToDestinos,
     requestShowInstructivo,
+    setPickingFromIsochroneMap,
+    setShowingInstitucionesOverlay,
   } = useRouteContext();
 
   useEffect(() => {
@@ -120,14 +103,9 @@ export default function MainMenu({ navigation }: DrawerContentComponentProps) {
   const handleSelectDestino = (destino: (typeof destinos)[0]) => {
     setSelectedDestination(destino);
     setSelectedInstitucion(null);
-    setDestinationMode("selected");
-    navigation.closeDrawer();
-  };
-
-  const handleSelectInstitucion = (inst: (typeof instituciones)[0]) => {
-    setSelectedInstitucion(inst);
-    setSelectedDestination(null);
-    setDestinationMode("selected");
+    setDestinationMode("manual");
+    setPickingFromIsochroneMap(false);
+    setShowingInstitucionesOverlay(false);
     navigation.closeDrawer();
   };
 
@@ -135,6 +113,18 @@ export default function MainMenu({ navigation }: DrawerContentComponentProps) {
     setDestinationMode("closest");
     setSelectedDestination(null);
     setSelectedInstitucion(null);
+    setPickingFromIsochroneMap(false);
+    setShowingInstitucionesOverlay(false);
+    navigation.closeDrawer();
+  };
+
+  // ★ Nueva opción: elegir destino desde el mapa con isócronas
+  const handlePickFromMap = () => {
+    setSelectedDestination(null);
+    setSelectedInstitucion(null);
+    setDestinationMode("manual");
+    setShowingInstitucionesOverlay(false);
+    setPickingFromIsochroneMap(true);
     navigation.closeDrawer();
   };
 
@@ -320,11 +310,14 @@ export default function MainMenu({ navigation }: DrawerContentComponentProps) {
             destinosYRef.current = e.nativeEvent.layout.y;
           }}
         >
-          <Text style={styles.sectionHeader}>📍 Punto de Encuentro</Text>
-          <Text style={styles.sectionSubtitle}>Zonas seguras de reunión</Text>
+          <Text style={styles.sectionHeader}>📍 Destino</Text>
+          <Text style={styles.sectionSubtitle}>
+            Zonas seguras de reunión
+          </Text>
 
           {parametrosBasicosListos && startMode !== null ? (
             <View style={{ marginTop: 8 }}>
+              {/* Punto más cercano */}
               <TouchableOpacity
                 style={[
                   styles.destinoCard,
@@ -341,20 +334,53 @@ export default function MainMenu({ navigation }: DrawerContentComponentProps) {
                     }
                     style={{ marginRight: 8 }}
                   />
-                  <Text
-                    style={[
-                      styles.destinoText,
-                      destinationMode === "closest" && styles.destinoTextActive,
-                    ]}
-                  >
-                    Punto más cercano
-                  </Text>
+                  <View style={{ flex: 1 }}>
+                    <Text
+                      style={[
+                        styles.destinoText,
+                        destinationMode === "closest" &&
+                          styles.destinoTextActive,
+                      ]}
+                    >
+                      Punto más cercano
+                    </Text>
+                    <Text
+                      style={[
+                        styles.destinoSubtext,
+                        destinationMode === "closest" && {
+                          color: "#ffffffaa",
+                        },
+                      ]}
+                    >
+                      Automático según tu ubicación
+                    </Text>
+                  </View>
                 </View>
               </TouchableOpacity>
 
+              {/* ★ NUEVA OPCIÓN: Elegir desde el mapa con isócronas */}
+              <TouchableOpacity
+                style={[styles.destinoCard, styles.destinoCardSpecial]}
+                onPress={handlePickFromMap}
+              >
+                <View style={styles.destinoRow}>
+                  <Text style={styles.destinoEmoji}>🗺️</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.destinoText}>
+                      Elegir con mapa de riesgo
+                    </Text>
+                    <Text style={styles.destinoSubtext}>
+                      Ve el mapa de calor y elige visualmente
+                    </Text>
+                  </View>
+                </View>
+              </TouchableOpacity>
+
+              {/* Lista de puntos de encuentro */}
+              <Text style={styles.listHeader}>O elige uno específico:</Text>
               {destinos.map((destino) => {
                 const isSelected =
-                  destinationMode === "selected" &&
+                  destinationMode === "manual" &&
                   selectedDestination?.id === destino.id &&
                   selectedInstitucion === null;
                 return (
@@ -398,69 +424,24 @@ export default function MainMenu({ navigation }: DrawerContentComponentProps) {
           )}
         </View>
 
-        {/* ── Instituciones ──────────────────────────────────────────────── */}
-        <Text style={styles.sectionHeader}>🏛️ Instituciones</Text>
-        <Text style={styles.sectionSubtitle}>Hospitales, seguridad y más</Text>
-
-        {parametrosBasicosListos && startMode !== null ? (
-          <View style={{ marginTop: 8 }}>
-            {instituciones.map((inst) => {
-              const isSelected = selectedInstitucion?.id === inst.id;
-              return (
-                <TouchableOpacity
-                  key={inst.id}
-                  style={[
-                    styles.institucionCard,
-                    isSelected && styles.destinoCardActive,
-                  ]}
-                  onPress={() => handleSelectInstitucion(inst)}
-                >
-                  <View style={styles.destinoRow}>
-                    <Text style={styles.destinoEmoji}>
-                      {iconoPorInstitucion[inst.nombre] ?? "🏢"}
-                    </Text>
-                    <View style={{ flex: 1 }}>
-                      <Text
-                        style={[
-                          styles.destinoText,
-                          isSelected && styles.destinoTextActive,
-                        ]}
-                      >
-                        {inst.nombre}
-                      </Text>
-                      <Text
-                        style={[
-                          styles.institucionTipo,
-                          isSelected && { color: "#ffffffaa" },
-                        ]}
-                      >
-                        {inst.tipo}
-                      </Text>
-                    </View>
-                  </View>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        ) : (
-          <View style={styles.inicioDeshabilitado}>
-            <MaterialIcons
-              name="lock"
-              size={16}
-              color="#b0bec5"
-              style={{ marginRight: 6 }}
-            />
-            <Text style={styles.inicioDeshabilitadoText}>
-              Completa los pasos anteriores para seleccionar una institución
-            </Text>
-          </View>
-        )}
-
         {parametrosBasicosListos && startMode !== null && !destinoListo && (
           <Text style={styles.inlineHint}>
-            Selecciona un punto de encuentro o institución para continuar
+            Selecciona un destino para continuar
           </Text>
         )}
+
+        {/* ── Tip informativo sobre instituciones ──────────────────────────── */}
+        <View style={styles.tipBox}>
+          <MaterialIcons
+            name="info-outline"
+            size={16}
+            color="#118ab2"
+            style={{ marginRight: 6, marginTop: 1 }}
+          />
+          <Text style={styles.tipText}>
+            ¿Buscas hospitales o CAI? Usa el botón 🏥 en el mapa.
+          </Text>
+        </View>
 
         {/* ── Ver guía ───────────────────────────────────────────────────── */}
         <TouchableOpacity
@@ -517,6 +498,15 @@ const styles = StyleSheet.create({
     paddingTop: 16,
   },
   sectionSubtitle: { fontSize: 11, color: "#888", marginBottom: 4 },
+  listHeader: {
+    fontSize: 11,
+    color: "#888",
+    marginTop: 12,
+    marginBottom: 6,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    fontWeight: "600",
+  },
   buttonGroup: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -600,14 +590,9 @@ const styles = StyleSheet.create({
     borderLeftColor: "#06d6a0",
     elevation: 2,
   },
-  institucionCard: {
-    padding: 12,
-    borderRadius: 12,
-    backgroundColor: "#f7f7f7",
-    marginBottom: 8,
-    borderLeftWidth: 4,
-    borderLeftColor: "#118ab2",
-    elevation: 2,
+  destinoCardSpecial: {
+    backgroundColor: "#fff7ed",
+    borderLeftColor: "#f97316",
   },
   destinoCardActive: { backgroundColor: "#118ab2", borderLeftColor: "#073b4c" },
   destinoRow: { flexDirection: "row", alignItems: "center" },
@@ -619,7 +604,7 @@ const styles = StyleSheet.create({
   },
   destinoText: { color: "#073b4c", fontWeight: "500", flex: 1 },
   destinoTextActive: { color: "#ffffff" },
-  institucionTipo: { fontSize: 10, color: "#888", marginTop: 1 },
+  destinoSubtext: { fontSize: 11, color: "#6b7280", marginTop: 2 },
   inicioDeshabilitado: {
     flexDirection: "row",
     alignItems: "center",
@@ -632,6 +617,17 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   inicioDeshabilitadoText: { color: "#b0bec5", fontSize: 12, flex: 1 },
+  tipBox: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    marginTop: 16,
+    padding: 10,
+    backgroundColor: "#e0f2fe",
+    borderRadius: 10,
+    borderLeftWidth: 3,
+    borderLeftColor: "#118ab2",
+  },
+  tipText: { fontSize: 12, color: "#0c4a6e", flex: 1, lineHeight: 17 },
   verGuiaBtn: {
     flexDirection: "row",
     alignItems: "center",

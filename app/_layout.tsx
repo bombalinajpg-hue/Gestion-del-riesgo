@@ -1,46 +1,47 @@
-import type { DrawerContentComponentProps } from "@react-navigation/drawer";
-import { Drawer } from "expo-router/drawer";
+/**
+ * Layout principal de la app con Expo Router.
+ *
+ * Estructura de navegación:
+ *   app/
+ *   ├── _layout.tsx        ← este archivo (Stack raíz + RouteProvider)
+ *   ├── index.tsx          ← HomeScreen (pantalla inicial)
+ *   ├── map.tsx            ← Pantalla del mapa (con drawer interno)
+ *   ├── emergency.tsx      ← Acciones durante emergencia
+ *   ├── community.tsx      ← Participación ciudadana
+ *   ├── training.tsx       ← Capacitación
+ *   ├── prepare.tsx        ← Preparación preventiva
+ *   └── statistics.tsx     ← Estadísticas y datos
+ *
+ * Nota: este layout reemplaza el que tenías para la navegación
+ * directa al mapa. El drawer del mapa se mantiene DENTRO de la
+ * pantalla /map, no a nivel raíz.
+ */
+
+import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import { useEffect } from "react";
-import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import InstructivoModal from "../components/InstructivoModal";
-import MainMenu from "../components/MainMenu";
 import { RouteProvider } from "../context/RouteContext";
-import destinos from "../data/destinos.json";
-import rawGraph from "../data/graph.json";
-import { linkDestinations, loadGraph } from "../src/services/graphService";
-import { recomputePublicAlerts } from "../src/services/reportsService";
 
 export default function RootLayout() {
-  useEffect(() => {
-    loadGraph(rawGraph as any);
-    // Asigna a cada destino su nodo-del-grafo más cercano
-    const linked = linkDestinations(destinos);
-    // Guarda linked en un contexto o AsyncStorage para reutilizarlo
-    // (ejemplo: almacenar en RouteContext)
-    recomputePublicAlerts(); // limpia alertas caducadas
-  }, []);
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <SafeAreaProvider>
-        <RouteProvider>
-          <Drawer
-            drawerContent={(props: DrawerContentComponentProps) => (
-              <MainMenu {...props} />
-            )}
-            screenOptions={{
-              drawerType: "front",
-              overlayColor: "rgba(0,0,0,0.5)",
-              headerShown: false,
-            }}
-          >
-            <Drawer.Screen name="index" options={{ title: "Mapa" }} />
-          </Drawer>
-          <InstructivoModal />
-          <StatusBar style="light" />
-        </RouteProvider>
-      </SafeAreaProvider>
-    </GestureHandlerRootView>
+    <SafeAreaProvider>
+      <RouteProvider>
+        <StatusBar style="auto" />
+        <Stack
+          screenOptions={{
+            headerShown: false,
+            animation: "slide_from_right",
+          }}
+        >
+          <Stack.Screen name="index" />
+          <Stack.Screen name="map" />
+          <Stack.Screen name="emergency" />
+          <Stack.Screen name="community" />
+          <Stack.Screen name="training" />
+          <Stack.Screen name="prepare" />
+          <Stack.Screen name="statistics" />
+        </Stack>
+      </RouteProvider>
+    </SafeAreaProvider>
   );
 }

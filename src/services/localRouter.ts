@@ -63,8 +63,9 @@ export async function computeRoute(
 ): Promise<LocalRouteResult | null> {
   const graph = getGraph();
 
-  const startSnap = snapToNearestNode(params.start.lat, params.start.lng, graph, 300);
-  if (!startSnap) return null;
+  const startIdx = snapToNearestNode(params.start.lat, params.start.lng, graph);
+  if (startIdx === null) return null;
+  const startNodeId = graph.nodes[startIdx].id;
 
   // Cargar bloqueos ciudadanos desde el servicio de reportes.
   // Esto es lo que materializa el objetivo 2: reportes → afectan el ruteo.
@@ -79,14 +80,15 @@ export async function computeRoute(
 
   let bestResult: LocalRouteResult | null = null;
   for (const ec of endCandidates) {
-    const endSnap = snapToNearestNode(ec.lat, ec.lng, graph, 300);
-    if (!endSnap) continue;
+    const endIdx = snapToNearestNode(ec.lat, ec.lng, graph);
+    if (endIdx === null) continue;
+    const endNodeId = graph.nodes[endIdx].id;
 
     const algorithm = params.algorithm ?? 'a-star';
     let result: LocalRouteResult | null = null;
 
     if (algorithm === 'dijkstra') {
-      result = dijkstra(graph, startSnap.nodeId, endSnap.nodeId, {
+      result = dijkstra(graph, startNodeId, endNodeId, {
         profile: params.profile,
         blockedEdgeIds,
         hazardPenalty:
@@ -95,7 +97,7 @@ export async function computeRoute(
             : undefined,
       });
     } else if (algorithm === 'a-star') {
-      result = aStar(graph, startSnap.nodeId, endSnap.nodeId, {
+      result = aStar(graph, startNodeId, endNodeId, {
         profile: params.profile,
         blockedEdgeIds,
         hazardPenalty:
@@ -106,7 +108,7 @@ export async function computeRoute(
     } else if (algorithm === 'time-dependent') {
       if (params.emergencyType === 'ninguna') {
         // TDD sin amenaza es equivalente a Dijkstra — caemos a A* por eficiencia
-        result = aStar(graph, startSnap.nodeId, endSnap.nodeId, {
+        result = aStar(graph, startNodeId, endNodeId, {
           profile: params.profile,
           blockedEdgeIds,
         });
@@ -120,7 +122,7 @@ export async function computeRoute(
               profile: params.profile,
               emergencyType: params.emergencyType,
             });
-        result = timeDependentDijkstra(graph, startSnap.nodeId, endSnap.nodeId, {
+        result = timeDependentDijkstra(graph, startNodeId, endNodeId, {
           profile: params.profile,
           departureTimeSeconds: params.departureTimeSeconds ?? 0,
           edgeCostAt,

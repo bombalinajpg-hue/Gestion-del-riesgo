@@ -16,7 +16,7 @@ import type { Graph, GraphNode, GraphEdge } from '../types/graph';
 /**
  * Raw del JSON — no trae los índices. Los construimos al cargar.
  */
-interface RawGraph {
+export interface RawGraph {
   nodes: GraphNode[];
   edges: GraphEdge[];
   bbox?: Graph['bbox'];
@@ -34,6 +34,25 @@ let cachedGraph: Graph | null = null;
  */
 export function loadGraph(rawGraph: RawGraph): Graph {
   if (cachedGraph) return cachedGraph;
+
+  // Validación mínima antes de asumir forma: si graph.json está corrupto
+  // o proviene de una versión vieja del build script, preferimos un error
+  // claro a un crash críptico dentro de .map/.forEach más abajo.
+  if (!rawGraph || typeof rawGraph !== 'object') {
+    throw new Error('graph.json inválido: root no es un objeto');
+  }
+  if (!Array.isArray(rawGraph.nodes) || rawGraph.nodes.length === 0) {
+    throw new Error('graph.json inválido: falta `nodes` o está vacío');
+  }
+  if (!Array.isArray(rawGraph.edges)) {
+    throw new Error('graph.json inválido: `edges` no es un array');
+  }
+  const firstNode = rawGraph.nodes[0];
+  if (typeof firstNode.id !== 'number' ||
+      typeof firstNode.lat !== 'number' ||
+      typeof firstNode.lng !== 'number') {
+    throw new Error('graph.json inválido: nodos sin {id,lat,lng} numéricos');
+  }
 
   const nodes = rawGraph.nodes;
   // JSON no soporta Infinity. El script build-graph.js serializa los costos
@@ -139,7 +158,8 @@ export function linkDestinations(
 ): DestinationWithNodeId[] {
   const graph = getGraph();
   return destinations.map((d) => {
-    const snap = snapToNearestNode(d.lat, d.lng, graph, 250);
-    return { ...d, graphNodeId: snap?.nodeId };
+    const nodeIndex = snapToNearestNode(d.lat, d.lng, graph);
+    const graphNodeId = nodeIndex !== null ? graph.nodes[nodeIndex].id : undefined;
+    return { ...d, graphNodeId };
   });
 }
