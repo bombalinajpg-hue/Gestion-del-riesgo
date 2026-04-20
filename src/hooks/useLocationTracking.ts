@@ -67,10 +67,15 @@ export function useLocationTracking(): UseLocationTrackingResult {
         );
         if (cancelled) { locSub.remove(); locSub = undefined; return; }
         headSub = await Location.watchHeadingAsync((h) => {
-          if (!cancelled) {
-            const raw = h.trueHeading ?? h.magHeading ?? 0;
-            setHeading(raw >= 0 ? raw : 0);
-          }
+          if (cancelled) return;
+          // expo-location devuelve -1 cuando el dispositivo no tiene
+          // brújula o el sensor aún no se estabilizó. Ignoramos esos
+          // eventos en vez de clamp a 0: "apuntando al norte" sería
+          // información falsa. Sin actualización, el último heading
+          // válido (o el 0 inicial) persiste.
+          const raw = h.trueHeading ?? h.magHeading ?? -1;
+          if (raw < 0) return;
+          setHeading(raw % 360);
         });
         if (cancelled) { headSub.remove(); headSub = undefined; return; }
       } catch (e) {

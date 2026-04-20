@@ -13,6 +13,7 @@ import { useRouteContext } from "../context/RouteContext";
 import destinos from "../data/destinos.json";
 import institucionesRaw from "../data/instituciones.json";
 import { EmergencyType, Institucion, RouteProfile, StartMode } from "../src/types/types";
+import { HAZARD_LEVELS, hazardLegendColor } from "../src/theme/hazardColors";
 
 const instituciones = institucionesRaw as Institucion[];
 
@@ -45,23 +46,9 @@ const EMERGENCY_OPTIONS: {
   { label: "Avenida torrencial", value: "avenida_torrencial", emoji: "🌪️" },
 ];
 
-type LeyendaItem = { nivel: "Baja" | "Media" | "Alta"; color: string };
-
-const LEYENDAS: Record<Exclude<EmergencyType, "ninguna">, LeyendaItem[]> = {
-  inundacion: [
-    { nivel: "Media", color: "rgba(30,144,255,0.4)" },
-    { nivel: "Alta", color: "rgba(0,0,205,0.5)" },
-  ],
-  movimiento_en_masa: [
-    { nivel: "Baja", color: "rgba(255,215,0,0.6)" },
-    { nivel: "Media", color: "rgba(255,140,0,0.6)" },
-    { nivel: "Alta", color: "rgba(139,0,0,0.7)" },
-  ],
-  avenida_torrencial: [
-    { nivel: "Media", color: "rgba(255,100,0,0.5)" },
-    { nivel: "Alta", color: "rgba(180,0,0,0.6)" },
-  ],
-};
+// La paleta de amenaza vive en `src/theme/hazardColors.ts` — compartida
+// con las capas Geojson pintadas sobre el mapa para evitar drift entre
+// leyenda y overlay (antes si cambiabas un color, la leyenda mentía).
 
 export default function MainMenu({ navigation }: DrawerContentComponentProps) {
   const insets = useSafeAreaInsets();
@@ -183,24 +170,29 @@ export default function MainMenu({ navigation }: DrawerContentComponentProps) {
                   </Text>
                 </TouchableOpacity>
 
-                {isActive && option.value !== "ninguna" && (
-                  <View style={styles.leyendaBox}>
-                    <Text style={styles.leyendaTitle}>Leyenda</Text>
-                    {LEYENDAS[option.value].map((item) => (
-                      <View key={item.nivel} style={styles.leyendaRow}>
-                        <View
-                          style={[
-                            styles.leyendaColor,
-                            { backgroundColor: item.color },
-                          ]}
-                        />
-                        <Text style={styles.leyendaText}>
-                          Amenaza {item.nivel}
-                        </Text>
-                      </View>
-                    ))}
-                  </View>
-                )}
+                {isActive && option.value !== "ninguna" && (() => {
+                  // TS no estrecha `option.value` dentro del map callback; lo
+                  // bindeamos a una variable local narrow.
+                  const hazardType = option.value;
+                  return (
+                    <View style={styles.leyendaBox}>
+                      <Text style={styles.leyendaTitle}>Leyenda</Text>
+                      {HAZARD_LEVELS[hazardType].map((nivel) => (
+                        <View key={nivel} style={styles.leyendaRow}>
+                          <View
+                            style={[
+                              styles.leyendaColor,
+                              { backgroundColor: hazardLegendColor(hazardType, nivel) },
+                            ]}
+                          />
+                          <Text style={styles.leyendaText}>
+                            Amenaza {nivel}
+                          </Text>
+                        </View>
+                      ))}
+                    </View>
+                  );
+                })()}
               </View>
             );
           })}

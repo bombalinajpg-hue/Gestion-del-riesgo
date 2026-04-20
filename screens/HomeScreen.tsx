@@ -28,6 +28,15 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useCommunityStatus } from "../src/hooks/useCommunityStatus";
 
+// Helper de pluralización en español. Antes vivía inline como tres
+// ternarios anidados en HomeScreen ("alerta{s} ciudadana{s} activa{s}")
+// y era fácil de leer mal. Acá concentramos la regla.
+function pluralizeAlerts(count: number): string {
+  return count === 1
+    ? "1 alerta ciudadana activa cerca"
+    : `${count} alertas ciudadanas activas cerca`;
+}
+
 type MaterialIconName = React.ComponentProps<typeof MaterialIcons>["name"];
 
 interface ModuleDef {
@@ -164,11 +173,7 @@ export default function HomeScreen() {
               activeOpacity={0.8}
             >
               <MaterialIcons name="error" size={18} color="#fff" />
-              <Text style={styles.alertBarText}>
-                {activeAlerts} alerta{activeAlerts !== 1 ? "s" : ""} ciudadana
-                {activeAlerts !== 1 ? "s" : ""} activa
-                {activeAlerts !== 1 ? "s" : ""} cerca
-              </Text>
+              <Text style={styles.alertBarText}>{pluralizeAlerts(activeAlerts)}</Text>
               <MaterialIcons name="chevron-right" size={18} color="#fff" />
             </TouchableOpacity>
           )}

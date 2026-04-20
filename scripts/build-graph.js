@@ -34,14 +34,34 @@ const AREA = {
   east: -75.605,
 };
 
-// Velocidades medias (m/s) por tipo de vía y perfil. Son estimaciones
-// razonables para ciudad colombiana intermedia. Ajustables.
+// ─── VELOCIDADES ESTIMADAS POR VÍA Y PERFIL ────────────────────────────────
+//
+// IMPORTANTE: los tiempos de evacuación que calcula la app dependen
+// directamente de estos valores. Si son optimistas, la app dice que el
+// usuario llega antes del frente de la amenaza cuando en realidad no.
+//
+// Fuentes usadas para calibrar (orden de preferencia):
+//   1. Fruin, J.J. (1971) "Pedestrian Planning and Design" — marcha normal
+//      en acera urbana: ~1.34 m/s (se baja a 1.2-1.3 en Colombia por mezcla
+//      de edades/cargas; se sube a 1.4+ en pánico según Still 2000).
+//   2. ORS (OpenRouteService) defaults para `foot-walking` (5 km/h ≈ 1.39)
+//      y `cycling-regular` (15 km/h ≈ 4.17) como sanity check.
+//   3. Observación local: velocidades vehiculares sobre vías de Santa Rosa
+//      de Cabal son conservadoras por pendientes (8% promedio) y firme
+//      irregular — de ahí que `residential` sea 29 km/h y no 50 km/h.
+//
+// NO son valores derivados de aforos locales: si el proyecto obtiene datos
+// (ej. conteos de SIMIT, GPS de buses), actualizar este bloque y
+// re-correr `node scripts/build-graph.js` para regenerar `data/graph.json`.
+//
+// Todo en m/s para que los cálculos del algoritmo (distancia / velocidad)
+// salgan directo en segundos sin conversión.
 const SPEEDS = {
   'foot-walking': {
-    footway: 1.2,
-    path: 1.0,
-    pedestrian: 1.3,
-    residential: 1.3,
+    footway: 1.2,       // 4.3 km/h — acera angosta, mixto edades
+    path: 1.0,          // 3.6 km/h — sendero sin pavimentar
+    pedestrian: 1.3,    // 4.7 km/h — calle peatonal
+    residential: 1.3,   // 4.7 km/h — vereda + calle residencial
     tertiary: 1.3,
     secondary: 1.3,
     primary: 1.3,
@@ -51,25 +71,28 @@ const SPEEDS = {
     default: 1.2,
   },
   'cycling-regular': {
-    cycleway: 4.5,
-    path: 3.5,
-    residential: 4.0,
+    cycleway: 4.5,      // 16 km/h — ciclovía dedicada
+    path: 3.5,          // 13 km/h — sendero compartido
+    residential: 4.0,   // 14 km/h — calle residencial
     tertiary: 4.5,
-    secondary: 5.0,
-    primary: 5.5,
+    secondary: 5.0,     // 18 km/h
+    primary: 5.5,       // 20 km/h
     service: 3.5,
     track: 3.0,
     default: 4.0,
   },
   'driving-car': {
-    residential: 8.0, // 29 km/h
-    tertiary: 11.0, // 40 km/h
-    secondary: 13.0, // 47 km/h
-    primary: 16.0, // 58 km/h
-    trunk: 19.0,
-    service: 5.5,
-    track: 4.0,
-    motorway: 25.0,
+    // Velocidades conservadoras: Santa Rosa de Cabal tiene pendientes
+    // pronunciadas (cordillera Central) y el firme en muchas vías
+    // secundarias/terciarias no permite sostener el límite legal.
+    residential: 8.0,   // 29 km/h
+    tertiary: 11.0,     // 40 km/h
+    secondary: 13.0,    // 47 km/h
+    primary: 16.0,      // 58 km/h
+    trunk: 19.0,        // 68 km/h
+    service: 5.5,       // 20 km/h
+    track: 4.0,         // 14 km/h — destapado
+    motorway: 25.0,     // 90 km/h
     default: 8.0,
   },
 };

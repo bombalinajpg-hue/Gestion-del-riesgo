@@ -150,7 +150,7 @@ export function multiSourceDijkstra(
  * No es criptográfico — basta para detectar "el grafo que generó esta
  * tabla ya no es el mismo que el actual".
  */
-function shortHash(graph: Graph): string {
+export function shortHash(graph: Graph): string {
   return `${graph.meta.nodeCount}-${graph.meta.edgeCount}-${graph.meta.builtAt.slice(0, 10)}`;
 }
 

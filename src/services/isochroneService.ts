@@ -38,6 +38,7 @@ import type {
 import {
   bandIsochrones,
   multiSourceDijkstra,
+  shortHash,
   type IsochroneBand,
 } from '../algorithms/multiSourceDijkstra';
 import { getGraph } from './graphService';
@@ -149,12 +150,46 @@ async function loadCached(
     const raw = await AsyncStorage.getItem(cacheKey(profile, emergencyType));
     if (!raw) return null;
     const table = JSON.parse(raw) as IsochroneTable;
-    // Valida integridad mínima
-    if (!table.entries || !table.profile) return null;
+    if (!isCacheValid(table, profile, emergencyType)) return null;
     return table;
   } catch {
     return null;
   }
+}
+
+/**
+ * Rechaza tablas corruptas o stale. Casos que bloqueamos:
+ *   - Forma mínima mala (entries, profile, emergencyType, graphHash faltan).
+ *   - `graphHash` no coincide con el grafo actual: el build script se
+ *     re-corrió y `destNodeId`/índices por nodo ya no corresponden a los
+ *     mismos lugares — devolver esta tabla llevaría al usuario al refugio
+ *     equivocado.
+ *   - `entries.length !== graph.nodes.length`: el número de nodos cambió,
+ *     así que los índices están desfasados.
+ *   - `profile` o `emergencyType` no coinciden con lo pedido: por si el
+ *     key del storage quedó colisionado entre versiones.
+ *
+ * Cuando devolvemos `false`, el caller recomputa y sobreescribe la cache.
+ */
+function isCacheValid(
+  table: IsochroneTable,
+  profile: RouteProfile,
+  emergencyType: EmergencyType,
+): boolean {
+  if (!table || typeof table !== 'object') return false;
+  if (!Array.isArray(table.entries) || !table.profile || !table.graphHash) return false;
+  if (table.profile !== profile) return false;
+  if (table.emergencyType !== emergencyType) return false;
+  try {
+    const graph = getGraph();
+    if (table.graphHash !== shortHash(graph)) return false;
+    if (table.entries.length !== graph.nodes.length) return false;
+  } catch {
+    // Si el grafo aún no se cargó no podemos validar — mejor rechazar
+    // que devolver una tabla que podría ser de otra build.
+    return false;
+  }
+  return true;
 }
 
 // ─── Consulta O(1) ──────────────────────────────────────────────────────────
