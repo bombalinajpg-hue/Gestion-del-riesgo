@@ -25,8 +25,11 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import FamilyGroupModal from "../components/FamilyGroupModal";
+import MissingPersonsModal from "../components/MissingPersonsModal";
 import QuickEvacuateSheet, { type StartSource } from "../components/QuickEvacuateSheet";
+import SafetyStatusModal from "../components/SafetyStatusModal";
 import { useRouteContext } from "../context/RouteContext";
 import { useCommunityStatus } from "../src/hooks/useCommunityStatus";
 import type { EmergencyType } from "../src/types/types";
@@ -126,6 +129,13 @@ export default function HomeScreen() {
     setQuickRouteMode,
   } = useRouteContext();
   const [sheetVisible, setSheetVisible] = useState(false);
+  // Modales de "Durante la emergencia" levantados hasta Home para que
+  // el usuario no tenga que navegar a EmergencyScreen → minimizamos taps
+  // en el camino crítico (compartir estado, ver familia, reportar).
+  const [safetyOpen, setSafetyOpen] = useState(false);
+  const [familyOpen, setFamilyOpen] = useState(false);
+  const [missingOpen, setMissingOpen] = useState(false);
+  const insets = useSafeAreaInsets();
 
   useFocusEffect(
     useCallback(() => {
@@ -238,10 +248,82 @@ export default function HomeScreen() {
             <MaterialIcons name="arrow-forward" size={22} color="#fff" />
           </TouchableOpacity>
 
-          {/* ── MÓDULOS SECUNDARIOS (grid 2x3) ───────────────────────── */}
+          {/* ── DURANTE LA EMERGENCIA — acciones rápidas en un tap ────
+              Levantamos los modales de EmergencyScreen (estado, familia,
+              desaparecidos) directo al Home. Evita navegar a otra
+              pantalla cuando el usuario ya está en pánico. */}
+          <Text style={styles.sectionTitle}>Durante la emergencia</Text>
+          <View style={styles.emergencyRow}>
+            <TouchableOpacity
+              style={styles.emergencyTool}
+              onPress={() => setSafetyOpen(true)}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel="Compartir mi estado: a salvo, evacuando o necesito ayuda"
+            >
+              <View style={[styles.emergencyToolIcon, { backgroundColor: "#d1fae5" }]}>
+                <MaterialIcons name="shield" size={22} color="#10b981" />
+              </View>
+              <Text style={styles.emergencyToolLabel}>Mi estado</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.emergencyTool}
+              onPress={() => setFamilyOpen(true)}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel="Ver ubicación de familia"
+            >
+              <View style={[styles.emergencyToolIcon, { backgroundColor: "#ede9fe" }]}>
+                <MaterialIcons name="group" size={22} color="#7c3aed" />
+              </View>
+              <Text style={styles.emergencyToolLabel}>Familia</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.emergencyTool}
+              onPress={() => setMissingOpen(true)}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel="Reportar desaparecido"
+            >
+              <View style={[styles.emergencyToolIcon, { backgroundColor: "#fce7f3" }]}>
+                <MaterialIcons name="person-search" size={22} color="#db2777" />
+              </View>
+              <Text style={styles.emergencyToolLabel}>Desaparecido</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* ── VISOR — promovido de grid a CTA secundario ─────────────
+              El visor es la pantalla de contexto (mapa vivo, reportes,
+              cifras) — útil antes, durante y después. Ponerlo en el
+              grid lo escondía; acá queda a 1 tap. */}
+          <TouchableOpacity
+            style={styles.visorCard}
+            onPress={() => router.push("/statistics")}
+            activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel="Abrir visor: mapa vivo con reportes y cifras"
+          >
+            <View style={styles.visorIcon}>
+              <MaterialIcons name="map" size={24} color="#4338ca" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.visorTitle}>Visor</Text>
+              <Text style={styles.visorSubtitle}>Mapa vivo · reportes · cifras</Text>
+            </View>
+            <MaterialIcons name="chevron-right" size={22} color="#94a3b8" />
+          </TouchableOpacity>
+
+          {/* ── MÓDULOS SECUNDARIOS (grid 2×n) ──────────────────────────
+              Se sacan del grid: `routes` (vive en CTA "Evacua"),
+              `emergency` (sus herramientas están en la fila de arriba),
+              `statistics` (promovido al Visor card). */}
           <Text style={styles.sectionTitle}>Todas las herramientas</Text>
           <View style={styles.grid}>
-            {MODULES.filter((m) => m.id !== "routes").map((mod) => (
+            {MODULES.filter((m) =>
+              m.id !== "routes" && m.id !== "emergency" && m.id !== "statistics"
+            ).map((mod) => (
               <TouchableOpacity
                 key={mod.id}
                 style={styles.gridCard}
@@ -288,7 +370,7 @@ export default function HomeScreen() {
 
       {/* ── BOTÓN 123 FLOTANTE ───────────────────────────────────────── */}
       <TouchableOpacity
-        style={styles.emergencyFab}
+        style={[styles.emergencyFab, { bottom: 24 + insets.bottom }]}
         onPress={handleCall123}
         activeOpacity={0.85}
         accessibilityLabel="Llamar a la línea de emergencia 123"
@@ -303,6 +385,19 @@ export default function HomeScreen() {
         visible={sheetVisible}
         onClose={() => setSheetVisible(false)}
         onConfirm={handleQuickEvacuate}
+      />
+      <SafetyStatusModal
+        visible={safetyOpen}
+        onClose={() => setSafetyOpen(false)}
+        location={null}
+      />
+      <FamilyGroupModal
+        visible={familyOpen}
+        onClose={() => setFamilyOpen(false)}
+      />
+      <MissingPersonsModal
+        visible={missingOpen}
+        onClose={() => setMissingOpen(false)}
       />
     </View>
   );
@@ -438,6 +533,61 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 2,
   },
+
+  // ─── Fila de "Durante la emergencia" ───
+  emergencyRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginHorizontal: 16,
+  },
+  emergencyTool: {
+    flex: 1,
+    backgroundColor: "#fff",
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 8,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    gap: 8,
+  },
+  emergencyToolIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  emergencyToolLabel: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#0f172a",
+    textAlign: "center",
+  },
+
+  // ─── Card del Visor (CTA secundario) ───
+  visorCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    marginHorizontal: 16,
+    marginTop: 14,
+    backgroundColor: "#fff",
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: "#e0e7ff",
+  },
+  visorIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: "#e0e7ff",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  visorTitle: { fontSize: 15, fontWeight: "700", color: "#0f172a" },
+  visorSubtitle: { fontSize: 12, color: "#64748b", marginTop: 2 },
 
   // ─── Grid ───
   sectionTitle: {

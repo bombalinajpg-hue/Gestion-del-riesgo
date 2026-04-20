@@ -98,10 +98,12 @@ export default function QuickEvacuateSheet({ visible, onClose, onConfirm }: Prop
       onRequestClose={onClose}
     >
       <Pressable style={styles.backdrop} onPress={onClose}>
-        {/* stopPropagation para que tocar dentro del sheet no cierre */}
-        <Pressable
+        {/* View con su propio responder: al tocar dentro, React Native
+            asigna el responder a esta View y el Pressable del backdrop
+            no recibe el touch — así no cierra al tocar dentro. */}
+        <View
           style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 16) + 8 }]}
-          onPress={(e) => e.stopPropagation()}
+          onStartShouldSetResponder={() => true}
         >
           <View style={styles.handle} />
           <View style={styles.header}>
@@ -208,7 +210,7 @@ export default function QuickEvacuateSheet({ visible, onClose, onConfirm }: Prop
           >
             <Text style={styles.cancelText}>Cancelar</Text>
           </TouchableOpacity>
-        </Pressable>
+        </View>
       </Pressable>
     </Modal>
   );

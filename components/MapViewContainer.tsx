@@ -19,6 +19,7 @@
  */
 
 import { MaterialIcons } from "@expo/vector-icons";
+import { useDrawerStatus } from "@react-navigation/drawer";
 import { DrawerActions, useNavigation } from "@react-navigation/native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import type { FeatureCollection, Geometry } from "geojson";
@@ -37,6 +38,7 @@ import {
   View,
 } from "react-native";
 import MapView, { MapType, Marker, Polyline } from "react-native-maps";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouteContext } from "../context/RouteContext";
 import avenidaTorrencialData from "../data/amenaza_avenida_torrencial.json";
 import InundacionData from "../data/amenaza_inundacion.json";
@@ -213,6 +215,9 @@ export default function MapViewContainer() {
   } = useRouteContext();
 
   const navigation = useNavigation();
+  const drawerStatus = useDrawerStatus(); // "open" | "closed"
+  const drawerOpen = drawerStatus === "open";
+  const insets = useSafeAreaInsets();
   const router = useRouter();
   // `useLocalSearchParams` puede devolver `string | string[]` si una clave
   // aparece duplicada en la URL. Normalizamos al primer valor y validamos
@@ -625,10 +630,12 @@ export default function MapViewContainer() {
     (destinoFinal !== null || (destinationMode === "closest" && closestPreview !== null));
 
   // Botón "Calcular ruta de evacuación" — aparece cuando todos los
-  // parámetros están listos. El "Elegir parámetros" viejo se eliminó:
-  // el drawer se abre automáticamente desde el Home y guía al usuario.
+  // parámetros están listos Y el drawer está cerrado. Sin el gate del
+  // drawer, al tocar "Confirmar punto de inicio" (que abre el drawer)
+  // el botón aparece por milisegundos antes de que la animación del
+  // drawer lo tape, se ve como un parpadeo.
   const mostrarBotonIniciar = parametrosListos && !evacuando &&
-    !pickingFromIsochroneMap && !showingInstitucionesOverlay;
+    !pickingFromIsochroneMap && !showingInstitucionesOverlay && !drawerOpen;
 
   // El mapa arranca limpio. Solo se muestran refugios cuando:
   //  - el usuario activó el toggle "Ver lugares" (top-right)
@@ -802,8 +809,25 @@ export default function MapViewContainer() {
         ))}
       </MapView>
 
-      {/* ★ ISSUE 4 FIX: botones Ir aquí + Street View visibles apenas hay destino */}
-      <View style={styles.bottomRightGroup} pointerEvents="box-none">
+      {/* ★ ISSUE 4 FIX: botones Ir aquí + Street View visibles apenas hay destino.
+          El grupo se sube cuando hay un pill ocupando bottom-center
+          (CONFIGURAR, CONFIRMAR PUNTO, CALCULAR, CANCELAR o banner de picking)
+          para que no se traslapen. */}
+      <View
+        style={[
+          styles.bottomRightGroup,
+          // bottom dinámico: base = 90 + home-indicator para que el grupo
+          // viva sobre el 123 pill del fondo; si hay un pill central
+          // (evacuar, confirmar, calcular, picking), se sube a 230.
+          {
+            bottom:
+              (evacuando || puntoPendiente || mostrarBotonIniciar || seleccionandoPunto)
+                ? 230
+                : 90 + insets.bottom,
+          },
+        ]}
+        pointerEvents="box-none"
+      >
         {destinoFinal && !pickingFromIsochroneMap && !showingInstitucionesOverlay && (
           <TouchableOpacity
             style={[styles.bottomRightBtn, { backgroundColor: "#6366f1" }]}
@@ -843,7 +867,7 @@ export default function MapViewContainer() {
       </View>
 
       <TouchableOpacity
-        style={styles.emergencyButton}
+        style={[styles.emergencyButton, { bottom: 24 + insets.bottom }]}
         onPress={handleLlamarEmergencia}
         activeOpacity={0.85}
         accessibilityLabel="Llamar a la línea de emergencia 123"
@@ -937,7 +961,13 @@ export default function MapViewContainer() {
           evacuación real, que es el botón azul "CALCULAR RUTA" abajo.
           Rojo quedaba para la acción panic del Home; acá el verdadero
           disparador de ruta no es este botón sino el siguiente. */}
-      {!mostrarBotonIniciar && !evacuando && !pickingFromIsochroneMap && !showingInstitucionesOverlay && (
+      {/* CONFIGURAR solo cuando el mapa está "limpio": nada en curso. Si
+          el usuario está eligiendo punto manual, tiene punto pendiente
+          de confirmar, viene de quickRoute, o calcula/evacúa/pickea,
+          este FAB estorba y lo ocultamos. */}
+      {!mostrarBotonIniciar && !evacuando && !pickingFromIsochroneMap &&
+       !showingInstitucionesOverlay && !seleccionandoPunto && !puntoPendiente &&
+       !quickRouteMode && !isCalculating && (
         <TouchableOpacity
           style={styles.configurarRutaFab}
           onPress={() => navigation.dispatch(DrawerActions.openDrawer())}

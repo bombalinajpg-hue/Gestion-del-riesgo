@@ -168,9 +168,19 @@ export const CATEGORY_ICONS: Record<ItemCategory, string> = {
   otros: '🧰',
 };
 
-/** Estado persistido — solo los IDs marcados */
+/** Meta-items del checklist de PrepareScreen que no son items del kit
+ * sino logros que el usuario declara haber hecho fuera de la app (no
+ * tenemos forma de verificarlos desde código). Se toggle-an manualmente
+ * desde la UI y se persisten igual que los ítems del kit. */
+export type MilestoneKey =
+  | "points_identified"    // conoce los puntos de encuentro en el mapa
+  | "training_completed"   // pasó por el módulo de Capacitación
+  | "contacts_saved";      // guardó 123/132/119/144 en contactos del teléfono
+
+/** Estado persistido: ítems del kit + milestones de preparación. */
 export interface PreparednessState {
   checkedIds: string[];
+  milestones?: Partial<Record<MilestoneKey, boolean>>;
   lastReviewAt?: string; // ISO
 }
 
@@ -202,6 +212,24 @@ export async function toggleItem(itemId: string): Promise<PreparednessState> {
   const next = { ...state, checkedIds: Array.from(set) };
   await savePreparedness(next);
   return next;
+}
+
+/** Marca/desmarca un milestone no verificable por código (p. ej.
+ * "ya guardé los números en contactos"). */
+export async function toggleMilestone(key: MilestoneKey): Promise<PreparednessState> {
+  const state = await loadPreparedness();
+  const milestones = { ...(state.milestones ?? {}) };
+  milestones[key] = !milestones[key];
+  const next = { ...state, milestones };
+  await savePreparedness(next);
+  return next;
+}
+
+export function isMilestoneDone(
+  state: PreparednessState,
+  key: MilestoneKey,
+): boolean {
+  return state.milestones?.[key] === true;
 }
 
 export function getProgress(state: PreparednessState): {

@@ -11,6 +11,8 @@ import { MaterialIcons } from "@expo/vector-icons";
 import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useState } from "react";
 import {
+  Alert,
+  Linking,
   ScrollView,
   StyleSheet,
   Text,
@@ -23,7 +25,11 @@ import PreparednessModal from "../components/PreparednessModal";
 import { getAllGroups } from "../src/services/familyGroupsService";
 import {
   getProgress as getPreparednessProgress,
+  isMilestoneDone,
   loadPreparedness,
+  type MilestoneKey,
+  type PreparednessState,
+  toggleMilestone,
 } from "../src/services/preparednessService";
 
 export default function PrepareScreen() {
@@ -33,10 +39,12 @@ export default function PrepareScreen() {
   const [prepPct, setPrepPct] = useState(0);
   const [prepCount, setPrepCount] = useState({ checked: 0, total: 18 });
   const [groups, setGroups] = useState(0);
+  const [prepState, setPrepState] = useState<PreparednessState>({ checkedIds: [] });
 
   const refresh = async () => {
     try {
       const prep = await loadPreparedness();
+      setPrepState(prep);
       const progress = getPreparednessProgress(prep);
       setPrepPct(progress.percent);
       setPrepCount({ checked: progress.checked, total: progress.total });
@@ -44,6 +52,29 @@ export default function PrepareScreen() {
     } catch (e) {
       console.warn("[PrepareScreen] refresh:", e);
     }
+  };
+
+  const handleMilestone = async (key: MilestoneKey) => {
+    const next = await toggleMilestone(key);
+    setPrepState(next);
+  };
+
+  const handleSaveContactsHint = () => {
+    Alert.alert(
+      "Números de emergencia",
+      "Abrimos el marcador con el 123. Para los demás (132 Cruz Roja, 119 Bomberos, 144 Defensa Civil, 112 Policía) repite el proceso o agrégalos manualmente. Marca el ítem como completado cuando los tengas guardados.",
+      [
+        { text: "Cancelar", style: "cancel" },
+        {
+          text: "Abrir 123",
+          onPress: () => Linking.openURL("tel:123").catch(() => {}),
+        },
+        {
+          text: "Ya los guardé",
+          onPress: () => handleMilestone("contacts_saved"),
+        },
+      ],
+    );
   };
 
   useFocusEffect(
@@ -161,28 +192,76 @@ export default function PrepareScreen() {
           <MaterialIcons name="chevron-right" size={22} color="#94a3b8" />
         </TouchableOpacity>
 
-        {/* Checklist de preparación general */}
+        {/* Checklist de preparación general.
+            Los dos primeros se derivan del estado del kit y del grupo
+            familiar (se marcan automáticamente al completarse).
+            Los otros tres son milestones manuales — no podemos verificarlos
+            desde la app, así que el usuario los toggle-a tocando la fila. */}
         <Text style={styles.sectionTitle}>Lista de verificación</Text>
         <View style={styles.checklistCard}>
           <ChecklistItem
             done={prepPct === 1}
             text="Kit de emergencia 72h completo"
+            onPress={() => setKitOpen(true)}
           />
           <ChecklistItem
             done={groups > 0}
             text="Grupo familiar creado"
+            onPress={() => setFamilyOpen(true)}
           />
           <ChecklistItem
-            done={false}
-            text="Puntos de encuentro identificados (en la app)"
+            done={isMilestoneDone(prepState, "points_identified")}
+            text="Puntos de encuentro identificados (en el mapa)"
+            hint="Tócame para abrir el visor y luego confirmar"
+            onPress={() => {
+              Alert.alert(
+                "Identifica los puntos de encuentro",
+                "Te llevamos al visor del mapa. Cuando los hayas localizado, vuelve y marca este ítem.",
+                [
+                  {
+                    text: "Abrir visor",
+                    onPress: () => router.push("/statistics"),
+                  },
+                  {
+                    text: isMilestoneDone(prepState, "points_identified")
+                      ? "Desmarcar"
+                      : "Ya los identifiqué",
+                    onPress: () => handleMilestone("points_identified"),
+                  },
+                  { text: "Cancelar", style: "cancel" },
+                ],
+              );
+            }}
           />
           <ChecklistItem
-            done={false}
-            text="Capacitación completada (revisa módulo Capacitación)"
+            done={isMilestoneDone(prepState, "training_completed")}
+            text="Capacitación completada"
+            hint="Revisa el módulo Capacitación y márcalo al terminar"
+            onPress={() => {
+              Alert.alert(
+                "Capacitación",
+                "Abre el módulo Capacitación y recórrelo. Vuelve acá para marcar cuando lo termines.",
+                [
+                  {
+                    text: "Abrir capacitación",
+                    onPress: () => router.push("/training"),
+                  },
+                  {
+                    text: isMilestoneDone(prepState, "training_completed")
+                      ? "Desmarcar"
+                      : "Ya la completé",
+                    onPress: () => handleMilestone("training_completed"),
+                  },
+                  { text: "Cancelar", style: "cancel" },
+                ],
+              );
+            }}
           />
           <ChecklistItem
-            done={false}
+            done={isMilestoneDone(prepState, "contacts_saved")}
             text="Números de emergencia guardados en tu contacto"
+            hint="123 · 132 · 119 · 144 · 112"
+            onPress={handleSaveContactsHint}
           />
         </View>
 
@@ -214,24 +293,54 @@ export default function PrepareScreen() {
   );
 }
 
-function ChecklistItem({ done, text }: { done: boolean; text: string }) {
-  return (
-    <View style={styles.checklistRow}>
+function ChecklistItem({
+  done,
+  text,
+  hint,
+  onPress,
+}: {
+  done: boolean;
+  text: string;
+  hint?: string;
+  onPress?: () => void;
+}) {
+  const content = (
+    <>
       <MaterialIcons
         name={done ? "check-circle" : "radio-button-unchecked"}
         size={20}
         color={done ? "#059669" : "#cbd5e1"}
       />
-      <Text
-        style={[
-          styles.checklistText,
-          done && { textDecorationLine: "line-through", color: "#64748b" },
-        ]}
-      >
-        {text}
-      </Text>
-    </View>
+      <View style={{ flex: 1 }}>
+        <Text
+          style={[
+            styles.checklistText,
+            done && { textDecorationLine: "line-through", color: "#64748b" },
+          ]}
+        >
+          {text}
+        </Text>
+        {hint && <Text style={styles.checklistHint}>{hint}</Text>}
+      </View>
+      {onPress && (
+        <MaterialIcons name="chevron-right" size={18} color="#cbd5e1" />
+      )}
+    </>
   );
+  if (onPress) {
+    return (
+      <TouchableOpacity
+        style={styles.checklistRow}
+        onPress={onPress}
+        activeOpacity={0.7}
+        accessibilityRole="button"
+        accessibilityLabel={`${text}. ${done ? "Completado" : "Pendiente"}`}
+      >
+        {content}
+      </TouchableOpacity>
+    );
+  }
+  return <View style={styles.checklistRow}>{content}</View>;
 }
 
 const styles = StyleSheet.create({
@@ -349,7 +458,8 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     gap: 10,
   },
-  checklistText: { fontSize: 13, color: "#0f172a", flex: 1 },
+  checklistText: { fontSize: 13, color: "#0f172a" },
+  checklistHint: { fontSize: 11, color: "#94a3b8", marginTop: 2 },
   infoBox: {
     flexDirection: "row",
     backgroundColor: "#dbeafe",
