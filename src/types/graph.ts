@@ -129,4 +129,11 @@ export interface LocalRouteResult {
   affectedByReports: boolean;
   destinationNodeId: number;
   destinationName?: string;
+  /**
+   * Verdadero cuando la ruta vino del fallback A*: TDD no encontró un
+   * camino que llegue antes del frente, así que el motor devolvió "la
+   * menos mala" con A*. La UI debe advertir al usuario que el camino
+   * cruza zonas que podrían estar comprometidas.
+   */
+  isRiskyFallback: boolean;
 }

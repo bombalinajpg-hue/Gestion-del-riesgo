@@ -20,6 +20,7 @@
 
 import { MaterialIcons } from "@expo/vector-icons";
 import { DrawerActions, useNavigation } from "@react-navigation/native";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import * as Location from "expo-location";
 import type { Feature, FeatureCollection, Geometry } from "geojson";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -44,7 +45,6 @@ import movimientoMasaData from "../data/amenaza_movimiento_en_masa.json";
 import destinosRaw from "../data/destinos.json";
 import rawGraph from "../data/graph.json";
 import institucionesRaw from "../data/instituciones.json";
-import { getAllGroups } from "../src/services/familyGroupsService";
 import {
   getGraph,
   linkDestinations,
@@ -56,12 +56,6 @@ import {
   queryFromLocation,
 } from "../src/services/isochroneService";
 import { computeRoute } from "../src/services/localRouter";
-import { getActiveMissing } from "../src/services/missingPersonsService";
-import {
-  fetchPOIs,
-  getCategoryIcon,
-  POIFeature,
-} from "../src/services/poiService";
 import { getRefugeByName } from "../src/services/refugesService";
 import {
   getActiveBlockingAlerts,
@@ -74,22 +68,17 @@ import type {
   HazardFeatureProperties,
   Institucion,
 } from "../src/types/types";
-import type { FamilyGroup, MissingPerson, RefugeDetails } from "../src/types/v4";
+import type { RefugeDetails } from "../src/types/v4";
 import {
   findPolygonExitPoint,
   isPointInAnyPolygonOrMulti,
 } from "../src/utils/geometry";
+import { DEV_MOCK_LOCATION, MOCK_LOCATION_COORDS } from "../src/utils/devMock";
 import { prewarmSnapIndex, snapToNearestNode } from "../src/utils/snapToGraph";
 import { useRouteCalculationState } from "../src/utils/useRouteCalculationState";
-import FamilyGroupModal from "./FamilyGroupModal";
 import IsochroneLegend from "./IsochroneLegend";
 import IsochroneOverlay from "./IsochroneOverlay";
-import MissingPersonsModal from "./MissingPersonsModal";
-import PreparednessModal from "./PreparednessModal";
 import RefugeDetailsModal from "./RefugeDetailsModal";
-import ReportButton from "./ReportButton";
-import ReportModal from "./ReportModal";
-import SafetyStatusModal from "./SafetyStatusModal";
 import StreetViewModal from "./StreetViewModal";
 import WeatherBadge from "./WeatherBadge";
 
@@ -229,39 +218,36 @@ export default function MapViewContainer() {
   const [dangerSegment, setDangerSegment] = useState<{ latitude: number; longitude: number }[]>([]);
   const [evacuando, setEvacuando] = useState(false);
   const [rutaSugerida, setRutaSugerida] = useState(false);
+  // TDD puede no encontrar camino que llegue antes del frente; en ese caso
+  // el motor devuelve "la menos mala" con A*. Guardamos el flag para que
+  // la UI advierta al usuario que el camino no está garantizado seguro.
+  const [rutaRiesgosa, setRutaRiesgosa] = useState(false);
   const [destinoFinal, setDestinoFinal] = useState<DestinoFinal | null>(null);
   const [alertaDangerMostrada, setAlertaDangerMostrada] = useState(false);
   const [puntoConfirmado, setPuntoConfirmado] = useState(false);
   const [mapType, setMapType] = useState<MapType>("hybrid");
   const [showMapTypePicker, setShowMapTypePicker] = useState(false);
   const [heading, setHeading] = useState(0);
-  const [pois, setPois] = useState<POIFeature[]>([]);
   const [resaltarIniciar, setResaltarIniciar] = useState(false);
   const [resumenRuta, setResumenRuta] = useState<{ distancia: string; tiempo: string } | null>(null);
 
   const [graphReady, setGraphReady] = useState(false);
-  const [reportModalVisible, setReportModalVisible] = useState(false);
-  const [preparednessVisible, setPreparednessVisible] = useState(false);
-  const [safetyModalVisible, setSafetyModalVisible] = useState(false);
   const [streetViewVisible, setStreetViewVisible] = useState(false);
-  const [missingModalVisible, setMissingModalVisible] = useState(false);
-  const [familyModalVisible, setFamilyModalVisible] = useState(false);
   const [refugeDetailsVisible, setRefugeDetailsVisible] = useState(false);
   const [refugeDetailsData, setRefugeDetailsData] = useState<RefugeDetails | null>(null);
   const [blockingAlerts, setBlockingAlerts] = useState<PublicAlert[]>([]);
-  const [missingPersons, setMissingPersons] = useState<MissingPerson[]>([]);
-  const [familyGroups, setFamilyGroups] = useState<FamilyGroup[]>([]);
   const [isoTable, setIsoTable] = useState<IsochroneTable | null>(null);
   const [isoError, setIsoError] = useState<string | null>(null);
   const [isoComputing, setIsoComputing] = useState(false);
   const [showIsochroneOverlay, setShowIsochroneOverlay] = useState(false);
+  const [showLugares, setShowLugares] = useState(false);
 
-  const { isCalculating, setCalculating, scheduleCalculation, cancelAll } = useRouteCalculationState();
+  const { isCalculating, setCalculating, cancelAll } = useRouteCalculationState();
 
   const {
     selectedDestination, setSelectedDestination,
     selectedInstitucion, setSelectedInstitucion,
-    routeProfile,
+    routeProfile, setRouteProfile,
     startMode, setStartMode,
     startPoint, setStartPoint,
     destinationMode, setDestinationMode,
@@ -270,6 +256,7 @@ export default function MapViewContainer() {
     setShouldScrollToDestinos,
     pickingFromIsochroneMap, setPickingFromIsochroneMap,
     showingInstitucionesOverlay, setShowingInstitucionesOverlay,
+    quickRouteMode, setQuickRouteMode,
   } = useRouteContext();
 
   const abortRef = useRef<AbortController | null>(null);
@@ -289,6 +276,14 @@ export default function MapViewContainer() {
   const avAlta = filterByCategoria(avenidaTorrencial, "Alta");
 
   const navigation = useNavigation();
+  const router = useRouter();
+  const params = useLocalSearchParams<{ autoOpen?: string; autoRoute?: string }>();
+  const autoOpenRef = useRef(false);
+  // Flags del pipeline quickRoute para evitar ejecutar los prompts más
+  // de una vez (cada uno ya cambió estado, no queremos re-disparar).
+  const quickAutoRouteRef = useRef(false);
+  const quickDestMethodAskedRef = useRef(false);
+  const quickActionAskedRef = useRef(false);
 
   const puntosEncuentro = useMemo(
     () => destinos.filter((d) => d.tipo === "punto_encuentro"),
@@ -331,8 +326,32 @@ export default function MapViewContainer() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Flujo rápido desde Emergency / Home: si llegamos con `?autoOpen=drawer`,
+  // abrimos el drawer automáticamente cuando el grafo está listo para que
+  // el usuario vea los parámetros pre-seleccionados y confirme con 1 tap.
+  useEffect(() => {
+    if (autoOpenRef.current) return;
+    if (!graphReady) return;
+    if (params.autoOpen === "drawer") {
+      autoOpenRef.current = true;
+      // Pequeño delay para que la animación de entrada de la pantalla termine.
+      const t = setTimeout(() => {
+        navigation.dispatch(DrawerActions.openDrawer());
+      }, 250);
+      return () => clearTimeout(t);
+    }
+  }, [graphReady, params.autoOpen, navigation]);
+
   // ── Ubicación ───────────────────────────────────────────────────────────
   useEffect(() => {
+    // Dev mock: usa una ubicación fija en Santa Rosa y salta todo el GPS
+    // real. Ver src/utils/devMock.ts y EXPO_PUBLIC_DEV_MOCK_LOCATION.
+    if (DEV_MOCK_LOCATION) {
+      setLocation(MOCK_LOCATION_COORDS);
+      setLoading(false);
+      setHeading(0);
+      return;
+    }
     let locSub: Location.LocationSubscription | undefined;
     let headSub: Location.LocationSubscription | undefined;
     let cancelled = false;
@@ -416,33 +435,13 @@ export default function MapViewContainer() {
     }
   }, [selectedDestination, selectedInstitucion]);
 
-  // POIs: se cargan una vez alrededor del usuario cuando el GPS ya dio
-  // un fix; si aún no hay fix al momento de estar listo el grafo, caemos
-  // al centroide del bbox. No re-fetcheamos al moverse (buffer de 1.5 km
-  // absorbe el desplazamiento peatonal típico de una sesión).
-  const poisFetchedRef = useRef(false);
-  useEffect(() => {
-    if (!graphReady || poisFetchedRef.current) return;
-    let lat: number, lng: number;
-    if (location) {
-      lat = location.latitude; lng = location.longitude;
-    } else {
-      const b = getGraph().bbox;
-      lat = (b.minLat + b.maxLat) / 2;
-      lng = (b.minLng + b.maxLng) / 2;
-    }
-    poisFetchedRef.current = true;
-    let cancelled = false;
-    fetchPOIs(lat, lng).then((p) => { if (!cancelled) setPois(p); });
-    return () => { cancelled = true; };
-  }, [graphReady, location]);
-
+  // En modo ruteo solo necesitamos las alertas ciudadanas bloqueantes
+  // (ya afectan al algoritmo via reportsService). Desaparecidos, familia
+  // y POIs se muestran en Community / Visor.
   const refreshAux = async () => {
     try {
       await recomputePublicAlerts();
       setBlockingAlerts(await getActiveBlockingAlerts());
-      setMissingPersons(await getActiveMissing());
-      setFamilyGroups(await getAllGroups());
     } catch (e) { console.warn("[MapView] refreshAux:", e); }
   };
 
@@ -552,7 +551,7 @@ export default function MapViewContainer() {
       const result = await computeRoute({
         start: { lat: startLat, lng: startLng },
         end: { lat: finalDestination.lat, lng: finalDestination.lng },
-        profile, emergencyType, algorithm: "a-star", alternativeEnds,
+        profile, emergencyType, algorithm: "time-dependent", alternativeEnds,
       });
       if (controller.signal.aborted) return;
       if (!result) {
@@ -572,6 +571,17 @@ export default function MapViewContainer() {
       setResumenRuta(formatRouteSummary(result.distanceMeters, result.durationSeconds));
       setDangerSegment(dangerCoords);
       setRouteCoords(routeCoords);
+      setRutaRiesgosa(result.isRiskyFallback);
+      // Si es ruta riesgosa y el usuario la confirma como evacuación, le
+      // avisamos una vez: no hay camino que el modelo garantice salir a
+      // tiempo, pero esta es la "menos mala" que encontró.
+      if (markAsEvacuando && result.isRiskyFallback) {
+        Alert.alert(
+          "⚠️ Sin ruta garantizada",
+          "El modelo no encontró un camino que llegue antes del frente de la amenaza. Esta es la ruta menos expuesta que existe. Actúa con extrema precaución.",
+          [{ text: "Entendido" }],
+        );
+      }
       if (markAsEvacuando) { setEvacuando(true); setRutaSugerida(false); }
       else { setRutaSugerida(true); }
     } catch (err) {
@@ -581,31 +591,18 @@ export default function MapViewContainer() {
     }
   };
 
-  const autoCalcDeps = [
-    graphReady, emergencyType, routeProfile, destinationMode,
-    selectedDestination, selectedInstitucion, startMode, startPoint,
-    puntoConfirmado, location, isoTable,
-  ];
-  useEffect(() => {
-    if (evacuando) return;
-    if (!location || !graphReady) return;
-    if (emergencyType === "ninguna") return;
-    const ubicacionLista = startMode === "gps" || (startMode === "manual" && startPoint !== null && puntoConfirmado);
-    const destinoListo = destinationMode === "closest" || selectedDestination !== null || selectedInstitucion !== null;
-    if (!ubicacionLista || !destinoListo || !routeProfile) return;
-    // Permitir un re-cálculo adicional cuando la tabla de isócronas acaba
-    // de llegar y el cálculo anterior (modo "closest") usó el fallback
-    // haversine: sin esto, el usuario se queda con un destino sub-óptimo.
-    const canImproveWithIso =
-      destinationMode === "closest" && isoTable !== null && !lastClosestUsedIsoRef.current;
-    if (rutaSugerida && routeCoords.length > 0 && !canImproveWithIso) return;
-    scheduleCalculation('auto-route', () => calcularRuta(false), 150);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, autoCalcDeps);
+  // Nota: el auto-route fue removido — calcular al elegir emergencia
+  // resultaba confuso (veías una ruta sin haberla pedido). El cálculo
+  // ahora solo lo dispara el botón "IR AQUÍ" explícitamente.
 
-  // ★ "IR AQUÍ" — botón principal que calcula ruta + inicia evacuación
+  // Botón principal "IR AQUÍ" — calcula ruta + inicia evacuación. Acepta
+  // dos casos:
+  //   - destinoFinal definido (el usuario eligió refugio/institución específicos)
+  //   - modo "closest" (calcularRuta hace findClosestViaGraph internamente)
   const handleIrAqui = async () => {
-    if (!destinoFinal || !location || !graphReady || evacuando) return;
+    if (!location || !graphReady || evacuando) return;
+    const tieneDestino = destinoFinal !== null || destinationMode === "closest";
+    if (!tieneDestino) return;
     if (emergencyType === "ninguna") {
       Alert.alert(
         "Selecciona una emergencia",
@@ -627,11 +624,19 @@ export default function MapViewContainer() {
     );
   };
 
+  const handleOpenGoogleMaps = () => {
+    if (!location || !destinoFinal) return;
+    const sLat = startMode === "manual" && startPoint ? startPoint.lat : location.latitude;
+    const sLng = startMode === "manual" && startPoint ? startPoint.lng : location.longitude;
+    openInGoogleMaps(sLat, sLng, destinoFinal.lat, destinoFinal.lng, routeProfile ?? "foot-walking");
+  };
+
   const handleResetAll = () => {
     cancelAll();
     abortRef.current?.abort();
     setEvacuando(false);
     setRutaSugerida(false);
+    setRutaRiesgosa(false);
     setRouteCoords([]);
     setDangerSegment([]);
     setDestinoFinal(null);
@@ -673,12 +678,129 @@ export default function MapViewContainer() {
     ]);
   };
 
-  const handleOpenGoogleMaps = () => {
-    if (!location || !destinoFinal) return;
-    const sLat = startMode === "manual" && startPoint ? startPoint.lat : location.latitude;
-    const sLng = startMode === "manual" && startPoint ? startPoint.lng : location.longitude;
-    openInGoogleMaps(sLat, sLng, destinoFinal.lat, destinoFinal.lng, routeProfile ?? "foot-walking");
-  };
+  // La navegación interna reemplaza Google Maps externo: la cámara sigue
+  // al usuario (efecto más abajo) y la ruta que se dibuja es la del motor
+  // local (TDD + fallback), no la de Google.
+
+  // ── Pipeline QUICK ROUTE (desde EmergencyScreen) ──────────────────────
+  //
+  // Caso A — "Desde mi ubicación": llegamos con ?autoRoute=1, startMode=gps,
+  // destinationMode=closest. Apenas location y graphReady listos, disparamos
+  // calcularRuta(true) — el usuario ya confirmó el flujo rápido, así que
+  // pasamos directo a evacuando.
+  useEffect(() => {
+    if (quickAutoRouteRef.current) return;
+    if (!quickRouteMode) return;
+    if (params.autoRoute !== "1") return;
+    if (!graphReady || !location) return;
+    if (startMode !== "gps") return;
+    if (emergencyType === "ninguna") return;
+    if (evacuando) return;
+    quickAutoRouteRef.current = true;
+    const t = setTimeout(() => {
+      setCalculating(() => calcularRuta(true));
+      setQuickRouteMode(false);
+    }, 350);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quickRouteMode, params.autoRoute, graphReady, location, startMode, emergencyType, evacuando]);
+
+  // Caso B — "Elegir en el mapa": tras tocar el mapa (startPoint set), en
+  // quickRouteMode auto-confirmamos y mostramos un Alert con los 3 métodos
+  // de destino. El usuario no tiene que pulsar "CONFIRMAR PUNTO".
+  useEffect(() => {
+    if (quickDestMethodAskedRef.current) return;
+    if (!quickRouteMode) return;
+    if (startMode !== "manual") return;
+    if (!startPoint) return;
+    if (emergencyType === "ninguna") return;
+    quickDestMethodAskedRef.current = true;
+    setPuntoConfirmado(true);
+    const t = setTimeout(() => {
+      Alert.alert(
+        "¿Cómo eliges el destino?",
+        "Selecciona el método para llegar al lugar seguro.",
+        [
+          {
+            text: "🏁 Punto más cercano",
+            onPress: () => {
+              setDestinationMode("closest");
+              setCalculating(() => calcularRuta(true));
+              setQuickRouteMode(false);
+            },
+          },
+          {
+            text: "🔥 Mapa de calor",
+            onPress: () => {
+              setDestinationMode("manual");
+              setPickingFromIsochroneMap(true);
+              setShowIsochroneOverlay(true);
+            },
+          },
+          {
+            text: "🏥 Instituciones",
+            onPress: () => {
+              setDestinationMode("manual");
+              setShowingInstitucionesOverlay(true);
+            },
+          },
+          {
+            text: "Cancelar",
+            style: "cancel",
+            onPress: () => setQuickRouteMode(false),
+          },
+        ],
+      );
+    }, 280);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quickRouteMode, startMode, startPoint, emergencyType]);
+
+  // Caso C — tras elegir destino (heatmap o institución) en quickRouteMode
+  // mostramos un Alert con 3 acciones: Iniciar navegación / Google Maps /
+  // Vista 360°. El destinoFinal ya se actualizó por el useEffect de
+  // [selectedDestination, selectedInstitucion].
+  useEffect(() => {
+    if (quickActionAskedRef.current) return;
+    if (!quickRouteMode) return;
+    if (!destinoFinal) return;
+    if (evacuando) return;
+    if (!pickingFromIsochroneMap && !showingInstitucionesOverlay &&
+        !selectedDestination && !selectedInstitucion) return;
+    quickActionAskedRef.current = true;
+    const t = setTimeout(() => {
+      Alert.alert(
+        `→ ${destinoFinal.nombre}`,
+        "¿Qué quieres hacer?",
+        [
+          {
+            text: "🏃 Iniciar ruta de evacuación",
+            onPress: () => {
+              setCalculating(() => calcularRuta(true));
+              setQuickRouteMode(false);
+            },
+          },
+          {
+            text: "🗺️ Calcular con Google Maps",
+            onPress: () => {
+              handleOpenGoogleMaps();
+              setQuickRouteMode(false);
+            },
+          },
+          {
+            text: "📷 Vista 360°",
+            onPress: () => {
+              setStreetViewVisible(true);
+              setQuickRouteMode(false);
+            },
+          },
+          { text: "Cancelar", style: "cancel" },
+        ],
+      );
+    }, 200);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quickRouteMode, destinoFinal, evacuando, selectedDestination, selectedInstitucion]);
 
   const handleOpenRefugeDetails = (nombre: string) => {
     const details = getRefugeByName(nombre);
@@ -744,29 +866,6 @@ export default function MapViewContainer() {
     handleOpenRefugeDetails(dest.nombre);
   };
 
-  const handleInstitucionMarkerPress = (inst: Institucion) => {
-    setSelectedInstitucion(inst);
-    setShowingInstitucionesOverlay(false);
-    // destinoFinal se actualiza automáticamente por useEffect
-  };
-
-  const userIsochroneQuery = useMemo(() => {
-    if (!isoTable || !location || !graphReady) return null;
-    return queryFromLocation(location.latitude, location.longitude, isoTable, getGraph());
-  }, [isoTable, location, graphReady]);
-
-  const familyMembersWithLocation = useMemo(() => {
-    const out: { deviceId: string; name: string; lat: number; lng: number; groupName: string }[] = [];
-    for (const g of familyGroups) {
-      for (const m of g.members) {
-        if (m.lat !== undefined && m.lng !== undefined) {
-          out.push({ deviceId: m.deviceId, name: m.name, lat: m.lat, lng: m.lng, groupName: g.name });
-        }
-      }
-    }
-    return out;
-  }, [familyGroups]);
-
   // initialRegion derivado del bbox del grafo — así el mapa siempre abre
   // enmarcando exactamente la zona cubierta, sin asumir una ciudad fija.
   const initialRegion = useMemo(() => {
@@ -780,6 +879,21 @@ export default function MapViewContainer() {
     const longitudeDelta = Math.max((b.maxLng - b.minLng) * 1.1, 0.01);
     return { latitude, longitude, latitudeDelta, longitudeDelta };
   }, [graphReady]);
+
+  // Preview del destino más cercano cuando el usuario eligió modo "closest"
+  // y hay emergencia seleccionada: así ve cuál refugio se tomaría ANTES
+  // de disparar el cálculo completo. IMPORTANTE: este useMemo debe estar
+  // antes de cualquier `return` condicional, para no violar las Rules of
+  // Hooks (el orden de hooks debe ser idéntico en cada render).
+  const closestPreview = useMemo((): Destino | null => {
+    if (destinoFinal) return null;
+    if (destinationMode !== "closest") return null;
+    if (!location || !graphReady) return null;
+    if (emergencyType === "ninguna") return null;
+    const lat = startMode === "manual" && startPoint ? startPoint.lat : location.latitude;
+    const lng = startMode === "manual" && startPoint ? startPoint.lng : location.longitude;
+    return findClosestViaGraph(lat, lng, puntosEncuentro, isoTable);
+  }, [destinoFinal, destinationMode, location, graphReady, emergencyType, startMode, startPoint, isoTable]);
 
   if (locationError) {
     const mensajes: Record<LocationError, { titulo: string; detalle: string }> = {
@@ -808,9 +922,20 @@ export default function MapViewContainer() {
       </View>
     );
 
-  const ubicacionLista = startMode === "gps" || (startMode === "manual" && startPoint !== null && puntoConfirmado);
+  // El origen está listo solo cuando el usuario lo confirma explícitamente
+  // (tanto GPS como manual). Esto da al usuario una pausa para verificar
+  // antes de pasar a elegir destino.
+  const ubicacionLista = puntoConfirmado;
   const seleccionandoPunto = startMode === "manual" && !evacuando;
-  const puntoPendiente = seleccionandoPunto && startPoint !== null && !puntoConfirmado;
+  // Botón "Confirmar punto de inicio" — ahora también se muestra en modo
+  // GPS (no solo manual) para obligar a una confirmación antes de elegir
+  // destino. No aplica en quickRouteMode (Emergency auto-confirma).
+  const puntoPendiente =
+    !puntoConfirmado && !evacuando && !quickRouteMode &&
+    !pickingFromIsochroneMap && !showingInstitucionesOverlay &&
+    emergencyType !== "ninguna" && routeProfile !== null &&
+    ((startMode === "gps" && location !== null) ||
+      (startMode === "manual" && startPoint !== null));
   const hayRutaCalculada = routeCoords.length > 0 || dangerSegment.length > 0;
   const iconoModo = routeProfile === "driving-car" ? "🚗" : routeProfile === "cycling-regular" ? "🚴" : "🚶";
   const mostrarIsocronas = (showIsochroneOverlay || pickingFromIsochroneMap) && isoTable !== null && !evacuando && emergencyType !== "ninguna";
@@ -818,22 +943,53 @@ export default function MapViewContainer() {
     selectedInstitucion !== null || startMode === "manual" || rutaSugerida || evacuando ||
     pickingFromIsochroneMap || showingInstitucionesOverlay;
 
-  // ★ Botón IR AQUÍ: visible cuando hay destino, ubicación lista, no evacuando, no en mode picking
-  const mostrarBotonIrAqui = destinoFinal !== null && ubicacionLista && !evacuando &&
+  // Los parámetros están completos cuando el usuario ya picó todo lo que
+  // el motor de ruteo necesita. En modo "closest" basta con que haya
+  // destinationMode y preview; en modo manual hace falta destinoFinal.
+  const parametrosListos =
+    ubicacionLista &&
+    routeProfile !== null &&
+    emergencyType !== "ninguna" &&
+    (destinoFinal !== null || (destinationMode === "closest" && closestPreview !== null));
+
+  // Botón "Calcular ruta de evacuación" — aparece cuando todos los
+  // parámetros están listos. El "Elegir parámetros" viejo se eliminó:
+  // el drawer se abre automáticamente desde el Home y guía al usuario.
+  const mostrarBotonIniciar = parametrosListos && !evacuando &&
     !pickingFromIsochroneMap && !showingInstitucionesOverlay;
 
-  // Determinar qué destinos mostrar en el mapa
-  const destinosToShow: Destino[] = pickingFromIsochroneMap
-    ? puntosEncuentro
-    : destinoFinal
-      ? [destinoFinal as Destino]
-      : [];
+  // El mapa arranca limpio. Solo se muestran refugios cuando:
+  //  - el usuario activó el toggle "Ver lugares" (top-right)
+  //  - el usuario activó el modo "Elegir con mapa de calor" (picking)
+  //  - el usuario ya eligió un destino específico (destinoFinal)
+  // En closest mode no se muestran — el usuario confía en el algoritmo y
+  // la ruta aparece al presionar IR AQUÍ.
+  const destinosToShow: Destino[] =
+    showLugares || pickingFromIsochroneMap
+      ? puntosEncuentro
+      : destinoFinal
+        ? [destinoFinal as Destino]
+        : [];
 
   return (
     <View style={styles.container}>
       <View style={styles.floatingTitle}>
-        <Text style={styles.floatingTitleText}>Rutas de Evacuación</Text>
+        <Text style={styles.floatingTitleText}>EvacuApp</Text>
       </View>
+
+      {DEV_MOCK_LOCATION && (
+        <View style={styles.devMockBadge} pointerEvents="none">
+          <Text style={styles.devMockBadgeText}>📍 DEV MOCK</Text>
+        </View>
+      )}
+
+      <TouchableOpacity
+        onPress={() => router.back()}
+        style={styles.backMapButton}
+        accessibilityLabel="Volver"
+      >
+        <MaterialIcons name="arrow-back" size={22} color="#073b4c" />
+      </TouchableOpacity>
 
       <TouchableOpacity
         onPress={() => navigation.dispatch(DrawerActions.openDrawer())}
@@ -842,57 +998,10 @@ export default function MapViewContainer() {
         <Text style={{ fontSize: 24 }}>☰</Text>
       </TouchableOpacity>
 
-      <View style={styles.leftActionColumn} pointerEvents="box-none">
-        <ReportButton
-          onPress={() => setReportModalVisible(true)}
-          nearbyAlertCount={blockingAlerts.length}
-          disabled={evacuando}
-        />
-        <TouchableOpacity
-          style={[styles.squareActionBtn, { backgroundColor: "#0891b2" }]}
-          onPress={() => setPreparednessVisible(true)}
-        >
-          <Text style={{ fontSize: 20 }}>🎒</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.squareActionBtn, { backgroundColor: "#10b981" }]}
-          onPress={() => setSafetyModalVisible(true)}
-        >
-          <Text style={{ fontSize: 20 }}>🛡️</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.squareActionBtn, { backgroundColor: "#7c3aed" }]}
-          onPress={() => setFamilyModalVisible(true)}
-        >
-          <Text style={{ fontSize: 20 }}>👨‍👩‍👧</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[
-            styles.squareActionBtn,
-            { backgroundColor: "#db2777" },
-            missingPersons.length > 0 && { borderWidth: 2, borderColor: "#fef3c7" },
-          ]}
-          onPress={() => setMissingModalVisible(true)}
-        >
-          <Text style={{ fontSize: 20 }}>🔍</Text>
-          {missingPersons.length > 0 && (
-            <View style={styles.miniBadge}>
-              <Text style={styles.miniBadgeText}>{Math.min(missingPersons.length, 9)}</Text>
-            </View>
-          )}
-        </TouchableOpacity>
-        {/* ★ Botón Instituciones */}
-        <TouchableOpacity
-          style={[styles.squareActionBtn, { backgroundColor: "#f59e0b" }, showingInstitucionesOverlay && { borderWidth: 2, borderColor: "#fff" }]}
-          onPress={() => {
-            setShowingInstitucionesOverlay((v) => !v);
-            setPickingFromIsochroneMap(false);
-          }}
-          accessibilityLabel="Instituciones"
-        >
-          <Text style={{ fontSize: 20 }}>🏥</Text>
-        </TouchableOpacity>
-      </View>
+      {/* La columna izquierda con botones de reports/prep/safety/family/
+          missing/instituciones se movió a sus propios módulos desde el
+          rediseño v4.3. Este mapa se dedica exclusivamente a calcular
+          la ruta de evacuación. */}
 
       <View style={styles.topRightGroup} pointerEvents="box-none">
         <TouchableOpacity style={styles.squareButton} onPress={() => setShowMapTypePicker(true)}>
@@ -912,6 +1021,18 @@ export default function MapViewContainer() {
           ) : (
             <MaterialIcons name="timer" size={24} color={showIsochroneOverlay ? "#ffffff" : "#073b4c"} />
           )}
+        </TouchableOpacity>
+        {/* Toggle "Ver lugares": muestra/oculta todos los refugios +
+            instituciones sobre el mapa, independiente del wizard. */}
+        <TouchableOpacity
+          style={[
+            styles.squareButton,
+            showLugares && { backgroundColor: "#f59e0b" },
+          ]}
+          onPress={() => setShowLugares((v) => !v)}
+          accessibilityLabel="Ver refugios e instituciones"
+        >
+          <MaterialIcons name="place" size={24} color={showLugares ? "#ffffff" : "#073b4c"} />
         </TouchableOpacity>
         <View style={styles.roundButton}>
           <NorthArrow heading={heading} />
@@ -935,17 +1056,17 @@ export default function MapViewContainer() {
             </Text>
           </View>
         )}
-        {showingInstitucionesOverlay && (
-          <View style={[styles.pickingBanner, { backgroundColor: "#f59e0b" }]}>
-            <MaterialIcons name="local-hospital" size={18} color="#fff" />
-            <Text style={styles.pickingBannerText}>
-              Instituciones cercanas · toca una para verla
-            </Text>
-          </View>
-        )}
         {evacuando && routeCoords.length > 0 && (
           <View style={styles.evacuandoBanner}>
             <Text style={styles.evacuandoText}>🚨 Evacuando</Text>
+          </View>
+        )}
+        {rutaRiesgosa && (evacuando || rutaSugerida) && (
+          <View style={styles.riskyBanner}>
+            <MaterialIcons name="warning" size={18} color="#fff" />
+            <Text style={styles.riskyBannerText}>
+              Ruta no garantizada · el frente podría cortarla
+            </Text>
           </View>
         )}
         {rutaSugerida && !evacuando && (
@@ -965,13 +1086,6 @@ export default function MapViewContainer() {
               {iconoModo} {resumenRuta.distancia} · ⏱️ {resumenRuta.tiempo}
             </Text>
             <Text style={styles.resumenSub} numberOfLines={1}>→ {destinoFinal.nombre}</Text>
-          </View>
-        )}
-        {!evacuando && !rutaSugerida && !pickingFromIsochroneMap && userIsochroneQuery && emergencyType !== "ninguna" && (
-          <View style={styles.isochroneInfoBanner}>
-            <Text style={styles.isochroneInfoTitle}>⏱️ Tiempo a seguridad</Text>
-            <Text style={styles.isochroneInfoTime}>{Math.round(userIsochroneQuery.timeSeconds / 60)} min</Text>
-            <Text style={styles.isochroneInfoDest} numberOfLines={1}>→ {userIsochroneQuery.destName}</Text>
           </View>
         )}
       </View>
@@ -1016,28 +1130,47 @@ export default function MapViewContainer() {
 
         {mostrarIsocronas && isoTable && <IsochroneOverlay graph={getGraph()} table={isoTable} />}
 
-        {/* Destinos: uno solo, o todos cuando picking */}
-        {destinosToShow.map((d) => (
-          <Marker
-            key={`dest-${d.nombre}`}
-            coordinate={{ latitude: d.lat, longitude: d.lng }}
-            title={d.nombre}
-            pinColor={pickingFromIsochroneMap ? "green" : "azure"}
-            stopPropagation
-            onPress={(e) => { e.stopPropagation?.(); handleDestinationMarkerPress(d); }}
-          />
-        ))}
+        {/* Destinos: uno solo (manual), todos cuando picking, o todos
+            con el más cercano resaltado cuando modo "closest". */}
+        {destinosToShow.map((d) => {
+          const isPreview = closestPreview?.nombre === d.nombre;
+          return (
+            <Marker
+              key={`dest-${d.nombre}`}
+              coordinate={{ latitude: d.lat, longitude: d.lng }}
+              title={isPreview ? `⭐ ${d.nombre}` : d.nombre}
+              description={isPreview ? "Destino sugerido (el más cercano)" : undefined}
+              pinColor={
+                pickingFromIsochroneMap ? "green" :
+                isPreview ? "red" :
+                "azure"
+              }
+              stopPropagation
+              onPress={(e) => { e.stopPropagation?.(); handleDestinationMarkerPress(d); }}
+            />
+          );
+        })}
 
-        {/* Instituciones cuando el overlay está activo */}
-        {showingInstitucionesOverlay && instituciones.map((inst, i) => (
+        {/* Instituciones: solo cuando el usuario las activa desde el
+            flujo quickRoute, o cuando el usuario activó el toggle "Ver
+            lugares". Si el tap viene del overlay del wizard la institución
+            se toma como destino; si viene del toggle de visualización solo
+            abre la info sin cambiar el flujo. */}
+        {(showingInstitucionesOverlay || showLugares) && instituciones.map((inst) => (
           <Marker
-            key={`inst-${i}-${inst.nombre}`}
+            key={`inst-${inst.id}`}
             coordinate={{ latitude: inst.lat, longitude: inst.lng }}
             title={inst.nombre}
             description={inst.tipo}
             pinColor="gold"
             stopPropagation
-            onPress={(e) => { e.stopPropagation?.(); handleInstitucionMarkerPress(inst); }}
+            onPress={(e) => {
+              e.stopPropagation?.();
+              if (showingInstitucionesOverlay) {
+                setSelectedInstitucion(inst);
+                setShowingInstitucionesOverlay(false);
+              }
+            }}
           />
         ))}
 
@@ -1050,7 +1183,11 @@ export default function MapViewContainer() {
           />
         )}
 
-        {blockingAlerts.map((alert) => (
+        {/* Alertas ciudadanas: solo visibles mientras se está evacuando
+            (para avisar al usuario de zonas que el router ya está evitando).
+            Antes de iniciar la ruta, el mapa queda limpio — las alertas se
+            ven en el Visor si el usuario las quiere consultar. */}
+        {evacuando && blockingAlerts.map((alert) => (
           <Marker
             key={alert.id}
             coordinate={{ latitude: alert.lat, longitude: alert.lng }}
@@ -1060,54 +1197,6 @@ export default function MapViewContainer() {
             stopPropagation
           />
         ))}
-
-        {missingPersons.map((p) => (
-          <Marker
-            key={`missing-${p.id}`}
-            coordinate={{ latitude: p.lastSeenLat, longitude: p.lastSeenLng }}
-            title={`🔍 ${p.name}`}
-            description={p.description.substring(0, 80)}
-            stopPropagation
-            onPress={(e) => { e.stopPropagation?.(); setMissingModalVisible(true); }}
-          >
-            <View style={styles.missingMarker}>
-              <Text style={{ fontSize: 16 }}>🔍</Text>
-            </View>
-          </Marker>
-        ))}
-
-        {familyMembersWithLocation.map((m) => (
-          <Marker
-            key={`family-${m.deviceId}`}
-            coordinate={{ latitude: m.lat, longitude: m.lng }}
-            title={`👨‍👩‍👧 ${m.name}`}
-            description={m.groupName}
-            stopPropagation
-          >
-            <View style={styles.familyMarker}>
-              <Text style={styles.familyMarkerText}>{m.name.substring(0, 1).toUpperCase()}</Text>
-            </View>
-          </Marker>
-        ))}
-
-        {pois.map((poi, index) => {
-          const icon = getCategoryIcon(poi);
-          const [lng, lat] = poi.geometry.coordinates;
-          const name = poi.properties.osm_tags?.name ?? icon.label;
-          return (
-            <Marker
-              key={`poi-${index}`}
-              coordinate={{ latitude: lat, longitude: lng }}
-              title={name}
-              description={poi.properties.category_ids ? Object.values(poi.properties.category_ids)[0]?.category_name : ""}
-              stopPropagation
-            >
-              <View style={{ backgroundColor: icon.color, borderRadius: 20, padding: 4, borderWidth: 2, borderColor: "#fff" }}>
-                <Text style={{ fontSize: 16 }}>{icon.label}</Text>
-              </View>
-            </Marker>
-          );
-        })}
       </MapView>
 
       {/* ★ ISSUE 4 FIX: botones Ir aquí + Street View visibles apenas hay destino */}
@@ -1181,31 +1270,9 @@ export default function MapViewContainer() {
         </TouchableWithoutFeedback>
       </Modal>
 
-      <ReportModal
-        visible={reportModalVisible}
-        onClose={() => setReportModalVisible(false)}
-        onSubmitted={refreshAux}
-        initialLocation={location ? { lat: location.latitude, lng: location.longitude } : undefined}
-      />
-
-      <PreparednessModal visible={preparednessVisible} onClose={() => setPreparednessVisible(false)} />
-
-      <SafetyStatusModal
-        visible={safetyModalVisible}
-        onClose={() => setSafetyModalVisible(false)}
-        location={location ? { latitude: location.latitude, longitude: location.longitude } : null}
-        refugeName={evacuando && destinoFinal ? destinoFinal.nombre : undefined}
-      />
-
-      <MissingPersonsModal
-        visible={missingModalVisible}
-        onClose={() => { setMissingModalVisible(false); refreshAux(); }}
-      />
-
-      <FamilyGroupModal
-        visible={familyModalVisible}
-        onClose={() => { setFamilyModalVisible(false); refreshAux(); }}
-      />
+      {/* ReportModal, PreparednessModal, SafetyStatusModal, MissingPersonsModal
+          y FamilyGroupModal fueron movidos a sus módulos propios. Aquí solo
+          quedan los modales estrictamente ligados al flujo de ruteo. */}
 
       <RefugeDetailsModal
         visible={refugeDetailsVisible}
@@ -1245,8 +1312,9 @@ export default function MapViewContainer() {
         </TouchableOpacity>
       )}
 
-      {/* ★ BOTÓN IR AQUÍ — aparece apenas hay destino */}
-      {mostrarBotonIrAqui && (
+      {/* BOTÓN "INICIAR RUTA DE EVACUACIÓN" — cuando todos los parámetros
+          están listos (destinoFinal o closest+preview). */}
+      {mostrarBotonIniciar && (
         <Animated.View
           style={{
             transform: [{ scale: resaltarIniciar ? pulseAnim : 1 }],
@@ -1268,7 +1336,7 @@ export default function MapViewContainer() {
               <MaterialIcons name="directions-run" size={22} color="#ffffff" style={{ marginRight: 8 }} />
             )}
             <Text style={styles.evacuarButtonText}>
-              {isCalculating ? "CALCULANDO..." : "IR AQUÍ"}
+              {isCalculating ? "CALCULANDO..." : "CALCULAR RUTA DE EVACUACIÓN"}
             </Text>
           </TouchableOpacity>
         </Animated.View>
@@ -1279,6 +1347,7 @@ export default function MapViewContainer() {
           <Text style={styles.cancelarButtonText}>✕ CANCELAR EVACUACIÓN</Text>
         </TouchableOpacity>
       )}
+
     </View>
   );
 }
@@ -1306,6 +1375,30 @@ const styles = StyleSheet.create({
     shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15, shadowRadius: 4, elevation: 5,
   },
   floatingTitleText: { color: "#073b4c", fontWeight: "bold", fontSize: 18, letterSpacing: 0.5 },
+  devMockBadge: {
+    position: "absolute",
+    top: 104,
+    alignSelf: "center",
+    zIndex: 11,
+    backgroundColor: "#fef3c7",
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#f59e0b",
+  },
+  devMockBadgeText: {
+    color: "#92400e",
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 0.4,
+  },
+  backMapButton: {
+    position: "absolute", top: 60, left: 20, zIndex: 11,
+    backgroundColor: "#ffffffee", width: 40, height: 40, borderRadius: 20,
+    alignItems: "center", justifyContent: "center",
+    shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4, elevation: 5,
+  },
   menuButton: {
     position: "absolute", top: 120, left: 20, zIndex: 10,
     backgroundColor: "#ffffffee", padding: 10, borderRadius: 10,
@@ -1366,6 +1459,12 @@ const styles = StyleSheet.create({
     shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 8, elevation: 8,
   },
   evacuandoText: { color: "#ffffff", fontWeight: "700", fontSize: 14, includeFontPadding: false },
+  riskyBanner: {
+    backgroundColor: "#b91c1c", paddingHorizontal: 14, paddingVertical: 8, borderRadius: 18,
+    flexDirection: "row", alignItems: "center", gap: 6, maxWidth: "85%",
+    shadowColor: "#000", shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.3, shadowRadius: 6, elevation: 6,
+  },
+  riskyBannerText: { color: "#fff", fontWeight: "700", fontSize: 12, flexShrink: 1 },
   resumenBanner: {
     backgroundColor: "#ffffffee", paddingHorizontal: 20, paddingVertical: 8, borderRadius: 20,
     elevation: 5, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15, shadowRadius: 4,

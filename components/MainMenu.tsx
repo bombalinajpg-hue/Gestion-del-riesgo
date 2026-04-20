@@ -11,7 +11,17 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouteContext } from "../context/RouteContext";
 import destinos from "../data/destinos.json";
-import { EmergencyType, RouteProfile, StartMode } from "../src/types/types";
+import institucionesRaw from "../data/instituciones.json";
+import { EmergencyType, Institucion, RouteProfile, StartMode } from "../src/types/types";
+
+const instituciones = institucionesRaw as Institucion[];
+
+const iconoPorInstitucion: Record<string, string> = {
+  SALUD: "🏥",
+  SEGURIDAD: "👮",
+  CULTO: "⛪",
+  EDUCACION: "🏫",
+};
 
 // ── Íconos por nombre ──────────────────────────────────────────────────────────
 const iconoPorDestino: Record<string, string> = {
@@ -103,6 +113,15 @@ export default function MainMenu({ navigation }: DrawerContentComponentProps) {
   const handleSelectDestino = (destino: (typeof destinos)[0]) => {
     setSelectedDestination(destino);
     setSelectedInstitucion(null);
+    setDestinationMode("manual");
+    setPickingFromIsochroneMap(false);
+    setShowingInstitucionesOverlay(false);
+    navigation.closeDrawer();
+  };
+
+  const handleSelectInstitucion = (inst: Institucion) => {
+    setSelectedInstitucion(inst);
+    setSelectedDestination(null);
     setDestinationMode("manual");
     setPickingFromIsochroneMap(false);
     setShowingInstitucionesOverlay(false);
@@ -430,18 +449,57 @@ export default function MainMenu({ navigation }: DrawerContentComponentProps) {
           </Text>
         )}
 
-        {/* ── Tip informativo sobre instituciones ──────────────────────────── */}
-        <View style={styles.tipBox}>
-          <MaterialIcons
-            name="info-outline"
-            size={16}
-            color="#118ab2"
-            style={{ marginRight: 6, marginTop: 1 }}
-          />
-          <Text style={styles.tipText}>
-            ¿Buscas hospitales o CAI? Usa el botón 🏥 en el mapa.
-          </Text>
-        </View>
+        {/* ── Instituciones (hospitales, CAI, parroquias, escuelas) ──────── */}
+        {parametrosBasicosListos && startMode !== null && (
+          <View>
+            <Text style={styles.sectionHeader}>🏥 Instituciones</Text>
+            <Text style={styles.sectionSubtitle}>
+              Hospitales · CAI · Parroquias · Escuelas
+            </Text>
+            <View style={{ marginTop: 8 }}>
+              {instituciones.map((inst) => {
+                const isSelected =
+                  destinationMode === "manual" &&
+                  selectedInstitucion?.id === inst.id;
+                return (
+                  <TouchableOpacity
+                    key={`inst-${inst.id}`}
+                    style={[
+                      styles.destinoCard,
+                      { borderLeftColor: "#f59e0b" },
+                      isSelected && styles.destinoCardActive,
+                    ]}
+                    onPress={() => handleSelectInstitucion(inst)}
+                  >
+                    <View style={styles.destinoRow}>
+                      <Text style={styles.destinoEmoji}>
+                        {iconoPorInstitucion[inst.tipo] ?? "📍"}
+                      </Text>
+                      <View style={{ flex: 1 }}>
+                        <Text
+                          style={[
+                            styles.destinoText,
+                            isSelected && styles.destinoTextActive,
+                          ]}
+                        >
+                          {inst.nombre}
+                        </Text>
+                        <Text
+                          style={[
+                            styles.destinoSubtext,
+                            isSelected && { color: "#ffffffaa" },
+                          ]}
+                        >
+                          {inst.tipo}
+                        </Text>
+                      </View>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+        )}
 
         {/* ── Ver guía ───────────────────────────────────────────────────── */}
         <TouchableOpacity

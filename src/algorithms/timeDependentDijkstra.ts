@@ -157,6 +157,7 @@ export function timeDependentDijkstra(
     durationSeconds: time[endIdx] - t0, // solo el tiempo de viaje real
     algorithm: 'time-dependent-dijkstra',
     affectedByReports: false,
+    isRiskyFallback: false,
     destinationNodeId: graph.nodes[endIdx].id,
   };
 }

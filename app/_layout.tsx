@@ -40,6 +40,7 @@ export default function RootLayout() {
           <Stack.Screen name="training" />
           <Stack.Screen name="prepare" />
           <Stack.Screen name="statistics" />
+          <Stack.Screen name="about" />
         </Stack>
       </RouteProvider>
     </SafeAreaProvider>

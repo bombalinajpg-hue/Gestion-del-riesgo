@@ -1,7 +1,4 @@
-// app/index.tsx
-import React from 'react';
-import MapViewContainer from '../components/MapViewContainer';
+// app/index.tsx — pantalla inicial de la app
+import HomeScreen from "../screens/HomeScreen";
 
-export default function Index() {
-  return <MapViewContainer />;
-}
+export default HomeScreen;

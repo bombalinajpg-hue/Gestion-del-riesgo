@@ -51,6 +51,11 @@ interface RouteContextType {
   // ★ v4.2: mostrar instituciones como overlay en el mapa
   showingInstitucionesOverlay: boolean;
   setShowingInstitucionesOverlay: React.Dispatch<React.SetStateAction<boolean>>;
+  // ★ v4.4: flujo rápido desde EmergencyScreen — guía al usuario paso a
+  // paso (tipo emergencia → origen → método de destino → ruta) con
+  // prompts automáticos en /map. Se limpia al completar o cancelar.
+  quickRouteMode: boolean;
+  setQuickRouteMode: React.Dispatch<React.SetStateAction<boolean>>;
 }
 
 const RouteContext = createContext<RouteContextType | undefined>(undefined);
@@ -79,6 +84,7 @@ export const RouteProvider: React.FC<{ children: React.ReactNode }> = ({
   });
   const [pickingFromIsochroneMap, setPickingFromIsochroneMap] = useState(false);
   const [showingInstitucionesOverlay, setShowingInstitucionesOverlay] = useState(false);
+  const [quickRouteMode, setQuickRouteMode] = useState(false);
 
   useEffect(() => {
     setBlockedRoutes(rawblockedRoutes as FeatureCollection);
@@ -125,6 +131,8 @@ export const RouteProvider: React.FC<{ children: React.ReactNode }> = ({
         setPickingFromIsochroneMap,
         showingInstitucionesOverlay,
         setShowingInstitucionesOverlay,
+        quickRouteMode,
+        setQuickRouteMode,
       }}
     >
       {children}

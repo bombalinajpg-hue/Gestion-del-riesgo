@@ -1,430 +1,566 @@
 /**
- * StatisticsScreen — Datos abiertos y estadísticas.
+ * Datos y Visor — mapa vivo de Santa Rosa con overlays de consulta
+ * y panel de estadísticas abajo. No calcula rutas; es un visor.
  *
- * Muestra información útil para el usuario y agrega valor académico
- * al proyecto. Los datos mostrados aquí provienen de:
- *   - Reportes ciudadanos acumulados en este dispositivo
- *   - Datos estáticos del municipio (hazards, destinos, instituciones)
- *   - Conteo de desaparecidos, grupos familiares, kit items
+ * Qué muestra (toggles):
+ *   - Mapa de calor de tiempo a refugio (isócronas) por tipo de emergencia
+ *   - Puntos de encuentro
+ *   - Instituciones
+ *   - Reportes ciudadanos activos
+ *   - Personas desaparecidas activas
  *
- * Para una versión futura con backend, estos datos vendrían de una
- * API central que agrega info de todos los dispositivos.
+ * Panel inferior con métricas agregadas del municipio.
  */
 
 import { MaterialIcons } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
-import { useEffect, useState } from "react";
+import * as Location from "expo-location";
+import { useFocusEffect, useRouter } from "expo-router";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ActivityIndicator,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
+import MapView, { Marker } from "react-native-maps";
 import { SafeAreaView } from "react-native-safe-area-context";
+import IsochroneLegend from "../components/IsochroneLegend";
+import IsochroneOverlay from "../components/IsochroneOverlay";
 import destinosJson from "../data/destinos.json";
+import rawGraph from "../data/graph.json";
 import institucionesJson from "../data/instituciones.json";
-import { getAllMissing } from "../src/services/missingPersonsService";
+import {
+  getGraph,
+  linkDestinations,
+  loadGraph,
+  type RawGraph,
+} from "../src/services/graphService";
+import { precomputeIsochrones } from "../src/services/isochroneService";
+import { getActiveMissing } from "../src/services/missingPersonsService";
 import {
   getActiveBlockingAlerts,
   recomputePublicAlerts,
 } from "../src/services/reportsService";
+import type { IsochroneTable, PublicAlert } from "../src/types/graph";
+import type { Destino, EmergencyType, Institucion } from "../src/types/types";
+import type { MissingPerson } from "../src/types/v4";
+import { DEV_MOCK_LOCATION, MOCK_LOCATION_COORDS } from "../src/utils/devMock";
+import { prewarmSnapIndex, snapToNearestNode } from "../src/utils/snapToGraph";
 
-const destinos = destinosJson as any[];
-const instituciones = institucionesJson as any[];
+const destinos = destinosJson as Destino[];
+const instituciones = institucionesJson as Institucion[];
+const puntosEncuentro = destinos.filter((d) => d.tipo === "punto_encuentro");
 
-export default function StatisticsScreen() {
+type LinkedDestino = Destino & { graphNodeId: number };
+
+const EMERGENCY_OPTIONS: { label: string; value: EmergencyType; emoji: string }[] = [
+  { label: "Ninguna", value: "ninguna", emoji: "—" },
+  { label: "Inundación", value: "inundacion", emoji: "🌊" },
+  { label: "M. en masa", value: "movimiento_en_masa", emoji: "⛰️" },
+  { label: "Av. torrencial", value: "avenida_torrencial", emoji: "🌪️" },
+];
+
+export default function DatosVisorScreen() {
   const router = useRouter();
-  const [activeAlerts, setActiveAlerts] = useState(0);
-  const [totalMissing, setTotalMissing] = useState(0);
-  const [resolvedMissing, setResolvedMissing] = useState(0);
+  const mapRef = useRef<MapView>(null);
 
-  const refresh = async () => {
+  // ─── Data ────────────────────────────────────────────────────────────────
+  const [graphReady, setGraphReady] = useState(false);
+  const [linkedDestinos, setLinkedDestinos] = useState<LinkedDestino[]>([]);
+  const [userLocation, setUserLocation] = useState<Location.LocationObjectCoords | null>(null);
+  const [alerts, setAlerts] = useState<PublicAlert[]>([]);
+  const [missing, setMissing] = useState<MissingPerson[]>([]);
+
+  // ─── UI state ────────────────────────────────────────────────────────────
+  const [emergencyType, setEmergencyType] = useState<EmergencyType>("inundacion");
+  const [showHeatmap, setShowHeatmap] = useState(true);
+  const [showInstitutions, setShowInstitutions] = useState(true);
+  const [showReports, setShowReports] = useState(true);
+  const [showMissing, setShowMissing] = useState(true);
+  const [isoTable, setIsoTable] = useState<IsochroneTable | null>(null);
+  const [isoComputing, setIsoComputing] = useState(false);
+
+  // ─── Bootstrap: grafo + snap de destinos ─────────────────────────────────
+  useEffect(() => {
+    try {
+      loadGraph(rawGraph as unknown as RawGraph);
+      const g = getGraph();
+      prewarmSnapIndex(g);
+      try { linkDestinations(puntosEncuentro); } catch {}
+      const linked: LinkedDestino[] = puntosEncuentro.flatMap((d) => {
+        const idx = snapToNearestNode(d.lat, d.lng, g);
+        if (idx === null) return [];
+        return [{ ...d, graphNodeId: g.nodes[idx].id }];
+      });
+      setLinkedDestinos(linked);
+      setGraphReady(true);
+    } catch (e) {
+      console.warn("[Visor] bootstrap:", e);
+    }
+  }, []);
+
+  // ─── Ubicación actual del usuario (solo para el marker, sin tracking) ────
+  useEffect(() => {
+    // Dev mock: coords fijos en Santa Rosa (ver src/utils/devMock.ts).
+    if (DEV_MOCK_LOCATION) {
+      setUserLocation(MOCK_LOCATION_COORDS);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const enabled = await Location.hasServicesEnabledAsync();
+        if (cancelled || !enabled) return;
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (cancelled || status !== "granted") return;
+        const fix = await Location.getLastKnownPositionAsync();
+        if (!cancelled && fix) setUserLocation(fix.coords);
+      } catch (e) {
+        console.warn("[Visor] location:", e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // ─── Cálculo de isócronas cuando cambia el tipo de emergencia ────────────
+  useEffect(() => {
+    if (!graphReady || linkedDestinos.length === 0) return;
+    if (emergencyType === "ninguna") { setIsoTable(null); return; }
+    let cancelled = false;
+    (async () => {
+      setIsoComputing(true);
+      try {
+        const table = await precomputeIsochrones({
+          profile: "foot-walking",
+          emergencyType,
+          destinations: linkedDestinos,
+        });
+        if (!cancelled) setIsoTable(table);
+      } catch (e) {
+        console.warn("[Visor] iso:", e);
+        if (!cancelled) setIsoTable(null);
+      } finally {
+        if (!cancelled) setIsoComputing(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [graphReady, linkedDestinos, emergencyType]);
+
+  // ─── Carga de alertas + desaparecidos al enfocar ─────────────────────────
+  const refreshLive = useCallback(async () => {
     try {
       await recomputePublicAlerts();
-      setActiveAlerts((await getActiveBlockingAlerts()).length);
-      const all = await getAllMissing();
-      setTotalMissing(all.length);
-      setResolvedMissing(all.filter((p) => p.status === "encontrada").length);
-    } catch {}
-  };
+      setAlerts(await getActiveBlockingAlerts());
+      setMissing(await getActiveMissing());
+    } catch (e) {
+      console.warn("[Visor] refreshLive:", e);
+    }
+  }, []);
 
-  useEffect(() => {
-    refresh();
-    // Re-carga al enfocar la pantalla
-    return () => {};
-  }, [navigation]);
+  useFocusEffect(
+    useCallback(() => {
+      refreshLive();
+    }, [refreshLive]),
+  );
 
-  const puntosEncuentro = destinos.filter((d: any) => d.tipo === "punto_encuentro").length;
-  const institucionesCount = instituciones.length;
+  // ─── Derivados ───────────────────────────────────────────────────────────
+  const initialRegion = useMemo(() => {
+    if (!graphReady) {
+      return { latitude: 4.8727, longitude: -75.6109, latitudeDelta: 0.07, longitudeDelta: 0.07 };
+    }
+    const b = getGraph().bbox;
+    return {
+      latitude: (b.minLat + b.maxLat) / 2,
+      longitude: (b.minLng + b.maxLng) / 2,
+      latitudeDelta: Math.max((b.maxLat - b.minLat) * 1.1, 0.01),
+      longitudeDelta: Math.max((b.maxLng - b.minLng) * 1.1, 0.01),
+    };
+  }, [graphReady]);
 
+  const heatmapVisible = showHeatmap && isoTable !== null && emergencyType !== "ninguna";
+
+  // ─── UI ──────────────────────────────────────────────────────────────────
   return (
     <SafeAreaView style={styles.root} edges={["top", "bottom"]}>
       <View style={styles.header}>
-        <TouchableOpacity
-          onPress={() => router.back()}
-          style={styles.backBtn}
-        >
+        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
           <MaterialIcons name="arrow-back" size={22} color="#fff" />
         </TouchableOpacity>
         <View style={{ flex: 1 }}>
-          <Text style={styles.headerTitle}>Estadísticas</Text>
-          <Text style={styles.headerSubtitle}>
-            Santa Rosa de Cabal · Datos abiertos
-          </Text>
+          <Text style={styles.headerTitle}>Datos y Visor</Text>
+          <Text style={styles.headerSubtitle}>Mapa vivo · Santa Rosa de Cabal</Text>
         </View>
       </View>
 
-      <ScrollView contentContainerStyle={styles.content}>
-        {/* Resumen del municipio */}
-        <View style={styles.heroCard}>
-          <Text style={styles.heroEmoji}>🏔️</Text>
-          <Text style={styles.heroTitle}>Santa Rosa de Cabal</Text>
-          <Text style={styles.heroSubtitle}>
-            Infraestructura mapeada para gestión del riesgo
-          </Text>
-        </View>
+      {/* Selector de emergencia */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.emergencyBar}
+        contentContainerStyle={styles.emergencyBarContent}
+      >
+        {EMERGENCY_OPTIONS.map((opt) => {
+          const isActive = emergencyType === opt.value;
+          return (
+            <TouchableOpacity
+              key={opt.value}
+              style={[styles.emergencyChip, isActive && styles.emergencyChipActive]}
+              onPress={() => setEmergencyType(opt.value)}
+            >
+              <Text style={[styles.emergencyChipText, isActive && styles.emergencyChipTextActive]}>
+                {opt.emoji} {opt.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
 
-        {/* Grid de métricas principales */}
+      {/* Mapa */}
+      <View style={styles.mapWrap}>
+        <MapView
+          ref={mapRef}
+          style={styles.map}
+          initialRegion={initialRegion}
+          showsUserLocation
+          showsMyLocationButton={false}
+          mapType="standard"
+        >
+          {heatmapVisible && <IsochroneOverlay graph={getGraph()} table={isoTable!} />}
+
+          {/* Puntos de encuentro siempre visibles */}
+          {puntosEncuentro.map((d) => (
+            <Marker
+              key={`pe-${d.id}`}
+              coordinate={{ latitude: d.lat, longitude: d.lng }}
+              title={d.nombre}
+              pinColor="green"
+            />
+          ))}
+
+          {showInstitutions && instituciones.map((inst) => (
+            <Marker
+              key={`inst-${inst.id}`}
+              coordinate={{ latitude: inst.lat, longitude: inst.lng }}
+              title={inst.nombre}
+              description={inst.tipo}
+              pinColor="gold"
+            />
+          ))}
+
+          {showReports && alerts.map((a) => (
+            <Marker
+              key={`alert-${a.id}`}
+              coordinate={{ latitude: a.lat, longitude: a.lng }}
+              title={labelForAlert(a.type)}
+              description={`${a.uniqueDeviceCount} ciudadano(s)`}
+              pinColor="red"
+            />
+          ))}
+
+          {showMissing && missing.map((p) => (
+            <Marker
+              key={`missing-${p.id}`}
+              coordinate={{ latitude: p.lastSeenLat, longitude: p.lastSeenLng }}
+              title={`🔍 ${p.name}`}
+              description={p.description.substring(0, 80)}
+            >
+              <View style={styles.missingMarker}>
+                <Text style={{ fontSize: 14 }}>🔍</Text>
+              </View>
+            </Marker>
+          ))}
+        </MapView>
+
+        {isoComputing && (
+          <View style={styles.computingBadge}>
+            <ActivityIndicator size="small" color="#d97706" />
+            <Text style={styles.computingText}>Calculando mapa de calor...</Text>
+          </View>
+        )}
+
+        {heatmapVisible && (
+          <View style={styles.legendWrap} pointerEvents="none">
+            <IsochroneLegend />
+          </View>
+        )}
+
+        {/* Toggles flotantes sobre el mapa */}
+        <View style={styles.toggleStrip}>
+          <ToggleChip
+            label="Calor"
+            icon="timer"
+            active={showHeatmap}
+            onPress={() => setShowHeatmap((v) => !v)}
+            disabled={emergencyType === "ninguna"}
+          />
+          <ToggleChip
+            label="Instituciones"
+            icon="local-hospital"
+            active={showInstitutions}
+            onPress={() => setShowInstitutions((v) => !v)}
+          />
+          <ToggleChip
+            label="Reportes"
+            icon="warning"
+            active={showReports}
+            onPress={() => setShowReports((v) => !v)}
+            badge={alerts.length}
+          />
+          <ToggleChip
+            label="Desaparecidos"
+            icon="person-search"
+            active={showMissing}
+            onPress={() => setShowMissing((v) => !v)}
+            badge={missing.length}
+          />
+        </View>
+      </View>
+
+      {/* Panel de métricas */}
+      <ScrollView style={styles.statsPanel} contentContainerStyle={{ paddingBottom: 16 }}>
+        <Text style={styles.statsTitle}>Resumen del municipio</Text>
         <View style={styles.metricsGrid}>
           <MetricCard
-            value={puntosEncuentro.toString()}
+            value={puntosEncuentro.length.toString()}
             label="Puntos de encuentro"
             icon="place"
             color="#059669"
             bg="#d1fae5"
           />
           <MetricCard
-            value={institucionesCount.toString()}
+            value={instituciones.length.toString()}
             label="Instituciones"
             icon="local-hospital"
             color="#b45309"
             bg="#fef3c7"
           />
           <MetricCard
-            value={activeAlerts.toString()}
+            value={alerts.length.toString()}
             label="Alertas activas"
             icon="warning"
             color="#dc2626"
             bg="#fee2e2"
-            pulse={activeAlerts > 0}
           />
           <MetricCard
-            value={totalMissing.toString()}
-            label="Reportes desaparecidos"
+            value={missing.length.toString()}
+            label="Desaparecidos activos"
             icon="person-search"
             color="#9333ea"
             bg="#f3e8ff"
           />
-        </View>
-
-        {/* Desaparecidos detalle */}
-        {totalMissing > 0 && (
-          <View style={styles.detailCard}>
-            <Text style={styles.detailTitle}>
-              🔍 Casos de personas desaparecidas
-            </Text>
-            <View style={styles.detailRow}>
-              <View style={styles.detailItem}>
-                <Text style={styles.detailBigNum}>
-                  {totalMissing - resolvedMissing}
-                </Text>
-                <Text style={styles.detailLabel}>Activos</Text>
-              </View>
-              <View style={styles.detailDivider} />
-              <View style={styles.detailItem}>
-                <Text style={[styles.detailBigNum, { color: "#059669" }]}>
-                  {resolvedMissing}
-                </Text>
-                <Text style={styles.detailLabel}>Encontrados</Text>
-              </View>
-              <View style={styles.detailDivider} />
-              <View style={styles.detailItem}>
-                <Text style={styles.detailBigNum}>
-                  {totalMissing > 0
-                    ? Math.round((resolvedMissing / totalMissing) * 100)
-                    : 0}
-                  %
-                </Text>
-                <Text style={styles.detailLabel}>Resolución</Text>
-              </View>
-            </View>
-          </View>
-        )}
-
-        {/* Amenazas del municipio */}
-        <Text style={styles.sectionTitle}>Amenazas identificadas</Text>
-
-        <View style={styles.hazardCard}>
-          <View style={styles.hazardHeader}>
-            <Text style={styles.hazardEmoji}>🌊</Text>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.hazardName}>Inundación</Text>
-              <Text style={styles.hazardType}>Zona de amenaza fluvial</Text>
-            </View>
-            <View
-              style={[styles.hazardBadge, { backgroundColor: "#dbeafe" }]}
-            >
-              <Text style={[styles.hazardBadgeText, { color: "#1e40af" }]}>
-                Media / Alta
-              </Text>
-            </View>
-          </View>
-        </View>
-
-        <View style={styles.hazardCard}>
-          <View style={styles.hazardHeader}>
-            <Text style={styles.hazardEmoji}>⛰️</Text>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.hazardName}>Movimiento en masa</Text>
-              <Text style={styles.hazardType}>Deslizamientos de tierra</Text>
-            </View>
-            <View
-              style={[styles.hazardBadge, { backgroundColor: "#fef3c7" }]}
-            >
-              <Text style={[styles.hazardBadgeText, { color: "#92400e" }]}>
-                Baja / Media / Alta
-              </Text>
-            </View>
-          </View>
-        </View>
-
-        <View style={styles.hazardCard}>
-          <View style={styles.hazardHeader}>
-            <Text style={styles.hazardEmoji}>🌪️</Text>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.hazardName}>Avenida torrencial</Text>
-              <Text style={styles.hazardType}>Crecientes súbitas</Text>
-            </View>
-            <View
-              style={[styles.hazardBadge, { backgroundColor: "#ffedd5" }]}
-            >
-              <Text style={[styles.hazardBadgeText, { color: "#7c2d12" }]}>
-                Media / Alta
-              </Text>
-            </View>
-          </View>
-        </View>
-
-        {/* Nota metodológica */}
-        <View style={styles.noteBox}>
-          <MaterialIcons name="science" size={18} color="#475569" />
-          <View style={{ flex: 1 }}>
-            <Text style={styles.noteTitle}>Nota metodológica</Text>
-            <Text style={styles.noteText}>
-              Los datos de amenazas provienen del estudio del municipio
-              basado en cartografía geomorfológica. Los reportes ciudadanos
-              se agregan cuando 3 o más dispositivos distintos reportan
-              situaciones similares en un radio de 30 metros.
-            </Text>
-          </View>
-        </View>
-
-        {/* Footer académico */}
-        <View style={styles.academicFooter}>
-          <MaterialIcons name="school" size={16} color="#64748b" />
-          <Text style={styles.academicText}>
-            Proyecto de pasantía · Ingeniería Catastral · Universidad
-            Distrital Francisco José de Caldas
-          </Text>
         </View>
       </ScrollView>
     </SafeAreaView>
   );
 }
 
-function MetricCard({
-  value,
-  label,
-  icon,
-  color,
-  bg,
-  pulse,
-}: {
+function labelForAlert(type: string): string {
+  switch (type) {
+    case "bloqueo_vial": return "Bloqueo vial";
+    case "sendero_obstruido": return "Sendero obstruido";
+    case "inundacion_local": return "Inundación puntual";
+    case "deslizamiento_local": return "Deslizamiento";
+    case "riesgo_electrico": return "Riesgo eléctrico";
+    case "refugio_saturado": return "Refugio saturado";
+    case "refugio_cerrado": return "Refugio cerrado";
+    default: return "Alerta ciudadana";
+  }
+}
+
+interface ToggleChipProps {
+  label: string;
+  icon: string;
+  active: boolean;
+  onPress: () => void;
+  disabled?: boolean;
+  badge?: number;
+}
+
+function ToggleChip({ label, icon, active, onPress, disabled, badge }: ToggleChipProps) {
+  return (
+    <TouchableOpacity
+      style={[
+        styles.toggleChip,
+        active && !disabled && styles.toggleChipActive,
+        disabled && styles.toggleChipDisabled,
+      ]}
+      onPress={onPress}
+      disabled={disabled}
+    >
+      <MaterialIcons
+        name={icon as any}
+        size={14}
+        color={disabled ? "#9ca3af" : active ? "#fff" : "#334155"}
+      />
+      <Text
+        style={[
+          styles.toggleChipText,
+          active && !disabled && styles.toggleChipTextActive,
+          disabled && { color: "#9ca3af" },
+        ]}
+      >
+        {label}
+      </Text>
+      {typeof badge === "number" && badge > 0 && (
+        <View style={styles.toggleBadge}>
+          <Text style={styles.toggleBadgeText}>{Math.min(badge, 9)}</Text>
+        </View>
+      )}
+    </TouchableOpacity>
+  );
+}
+
+interface MetricCardProps {
   value: string;
   label: string;
   icon: string;
   color: string;
   bg: string;
-  pulse?: boolean;
-}) {
+}
+
+function MetricCard({ value, label, icon, color, bg }: MetricCardProps) {
   return (
-    <View style={styles.metricCard}>
-      <View style={[styles.metricIcon, { backgroundColor: bg }]}>
-        <MaterialIcons name={icon as any} size={22} color={color} />
-        {pulse && <View style={[styles.pulseDot, { backgroundColor: "#dc2626" }]} />}
-      </View>
-      <Text style={styles.metricValue}>{value}</Text>
+    <View style={[styles.metricCard, { backgroundColor: bg }]}>
+      <MaterialIcons name={icon as any} size={22} color={color} />
+      <Text style={[styles.metricValue, { color }]}>{value}</Text>
       <Text style={styles.metricLabel}>{label}</Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: "#eef2ff" },
+  root: { flex: 1, backgroundColor: "#f8fafc" },
   header: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 12,
-    paddingVertical: 14,
     backgroundColor: "#4338ca",
-    gap: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    gap: 12,
   },
   backBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "rgba(255,255,255,0.15)",
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: "rgba(255,255,255,0.2)",
     justifyContent: "center",
     alignItems: "center",
   },
   headerTitle: { color: "#fff", fontSize: 17, fontWeight: "700" },
-  headerSubtitle: { color: "#c7d2fe", fontSize: 11, marginTop: 1 },
-  content: { padding: 16, paddingBottom: 32 },
+  headerSubtitle: { color: "#c7d2fe", fontSize: 11, marginTop: 2 },
 
-  heroCard: {
-    backgroundColor: "#fff",
-    padding: 22,
-    borderRadius: 20,
+  emergencyBar: { maxHeight: 50, flexGrow: 0 },
+  emergencyBarContent: { paddingHorizontal: 12, paddingVertical: 8, gap: 8 },
+  emergencyChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 18,
+    backgroundColor: "#e2e8f0",
+  },
+  emergencyChipActive: { backgroundColor: "#4338ca" },
+  emergencyChipText: { fontSize: 13, color: "#334155", fontWeight: "600" },
+  emergencyChipTextActive: { color: "#fff" },
+
+  mapWrap: { flex: 1.3, position: "relative" },
+  map: { flex: 1 },
+
+  toggleStrip: {
+    position: "absolute",
+    left: 10,
+    right: 10,
+    bottom: 10,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+    justifyContent: "center",
+  },
+  toggleChip: {
+    flexDirection: "row",
     alignItems: "center",
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: "#e0e7ff",
+    backgroundColor: "rgba(255,255,255,0.95)",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 16,
+    gap: 4,
+    elevation: 3,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.15,
+    shadowRadius: 3,
   },
-  heroEmoji: { fontSize: 46 },
-  heroTitle: {
-    fontSize: 20,
-    fontWeight: "800",
-    color: "#312e81",
-    marginTop: 4,
+  toggleChipActive: { backgroundColor: "#4338ca" },
+  toggleChipDisabled: { opacity: 0.5 },
+  toggleChipText: { fontSize: 11, fontWeight: "700", color: "#334155" },
+  toggleChipTextActive: { color: "#fff" },
+  toggleBadge: {
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: "#ef4444",
+    paddingHorizontal: 3,
+    justifyContent: "center",
+    alignItems: "center",
   },
-  heroSubtitle: { fontSize: 12, color: "#6366f1", marginTop: 4 },
+  toggleBadgeText: { color: "#fff", fontSize: 9, fontWeight: "800" },
 
+  computingBadge: {
+    position: "absolute",
+    top: 10,
+    alignSelf: "center",
+    backgroundColor: "#fef3c7",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    elevation: 3,
+  },
+  computingText: { color: "#92400e", fontSize: 11, fontWeight: "700" },
+
+  legendWrap: { position: "absolute", top: 10, right: 10 },
+
+  missingMarker: {
+    backgroundColor: "#fbbf24",
+    borderRadius: 15,
+    width: 30,
+    height: 30,
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 2,
+    borderColor: "#fff",
+  },
+
+  statsPanel: {
+    flex: 1,
+    backgroundColor: "#fff",
+    borderTopWidth: 1,
+    borderTopColor: "#e5e7eb",
+    paddingHorizontal: 12,
+    paddingTop: 12,
+  },
+  statsTitle: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#475569",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    marginBottom: 10,
+    paddingHorizontal: 4,
+  },
   metricsGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 10,
-    marginBottom: 16,
+    gap: 8,
   },
   metricCard: {
-    width: "48%",
-    backgroundColor: "#fff",
-    padding: 14,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: "#e2e8f0",
-  },
-  metricIcon: {
-    width: 40,
-    height: 40,
+    width: "47%",
+    padding: 12,
     borderRadius: 12,
-    justifyContent: "center",
-    alignItems: "center",
-    marginBottom: 8,
-    position: "relative",
+    gap: 4,
   },
-  pulseDot: {
-    position: "absolute",
-    top: 2,
-    right: 2,
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    borderWidth: 1.5,
-    borderColor: "#fff",
-  },
-  metricValue: {
-    fontSize: 28,
-    fontWeight: "800",
-    color: "#0f172a",
-    letterSpacing: -0.5,
-  },
-  metricLabel: { fontSize: 11, color: "#64748b", marginTop: 2 },
-
-  detailCard: {
-    backgroundColor: "#fff",
-    padding: 16,
-    borderRadius: 14,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: "#e2e8f0",
-  },
-  detailTitle: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: "#334155",
-    marginBottom: 12,
-  },
-  detailRow: { flexDirection: "row", alignItems: "center" },
-  detailItem: { flex: 1, alignItems: "center" },
-  detailDivider: {
-    width: 1,
-    height: 38,
-    backgroundColor: "#e2e8f0",
-  },
-  detailBigNum: { fontSize: 24, fontWeight: "800", color: "#0f172a" },
-  detailLabel: { fontSize: 10, color: "#64748b", marginTop: 3 },
-
-  sectionTitle: {
-    fontSize: 12,
-    fontWeight: "700",
-    color: "#64748b",
-    marginBottom: 10,
-    textTransform: "uppercase",
-    letterSpacing: 0.8,
-  },
-  hazardCard: {
-    backgroundColor: "#fff",
-    padding: 14,
-    borderRadius: 12,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: "#e2e8f0",
-  },
-  hazardHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-  },
-  hazardEmoji: { fontSize: 24 },
-  hazardName: { fontSize: 14, fontWeight: "700", color: "#0f172a" },
-  hazardType: { fontSize: 11, color: "#64748b", marginTop: 1 },
-  hazardBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  hazardBadgeText: { fontSize: 10, fontWeight: "700" },
-
-  noteBox: {
-    flexDirection: "row",
-    backgroundColor: "#f1f5f9",
-    padding: 14,
-    borderRadius: 12,
-    marginTop: 20,
-    gap: 10,
-  },
-  noteTitle: {
-    fontSize: 12,
-    fontWeight: "700",
-    color: "#334155",
-    marginBottom: 4,
-  },
-  noteText: { fontSize: 11, color: "#475569", lineHeight: 16 },
-
-  academicFooter: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-    marginTop: 20,
-    paddingHorizontal: 20,
-  },
-  academicText: {
-    flex: 1,
-    fontSize: 10,
-    color: "#94a3b8",
-    textAlign: "center",
-    fontStyle: "italic",
-  },
+  metricValue: { fontSize: 20, fontWeight: "800" },
+  metricLabel: { fontSize: 11, color: "#475569", fontWeight: "600" },
 });

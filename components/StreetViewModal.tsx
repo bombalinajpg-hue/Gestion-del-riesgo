@@ -27,7 +27,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 
 const API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
@@ -47,6 +47,10 @@ export default function StreetViewModal({
   longitude,
   placeName,
 }: Props) {
+  // En Modal con presentationStyle="fullScreen" la SafeAreaView no siempre
+  // aplica correctamente los insets en iOS. Tomamos los insets directo y
+  // los aplicamos al header para que la X nunca quede tras el notch.
+  const insets = useSafeAreaInsets();
   const [loading, setLoading] = useState(true);
   const [timedOut, setTimedOut] = useState(false);
   const timerRef = useRef<any>(null);
@@ -111,8 +115,9 @@ export default function StreetViewModal({
       onRequestClose={onClose}
     >
       <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-        {/* Header */}
-        <View style={styles.header}>
+        {/* Header con padding-top explícito del notch para garantizar
+            que la X nunca quede bajo la barra de estado. */}
+        <View style={[styles.header, { paddingTop: Math.max(insets.top, 10) }]}>
           <TouchableOpacity onPress={onClose} style={styles.headerButton}>
             <MaterialIcons name="close" size={24} color="#ffffff" />
           </TouchableOpacity>

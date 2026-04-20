@@ -78,65 +78,85 @@ export async function computeRoute(
     ? params.alternativeEnds
     : [{ lat: params.end.lat, lng: params.end.lng, name: 'Destino' }];
 
-  let bestResult: LocalRouteResult | null = null;
-  for (const ec of endCandidates) {
-    const endIdx = snapToNearestNode(ec.lat, ec.lng, graph);
-    if (endIdx === null) continue;
-    const endNodeId = graph.nodes[endIdx].id;
+  const algorithm = params.algorithm ?? 'a-star';
+  const hazardPenaltyOpts =
+    params.emergencyType !== 'ninguna'
+      ? { ...DEFAULT_HAZARD_PENALTIES[params.emergencyType], emergencyType: params.emergencyType }
+      : undefined;
 
-    const algorithm = params.algorithm ?? 'a-star';
-    let result: LocalRouteResult | null = null;
+  // Corre el algoritmo elegido contra todos los candidatos y devuelve el
+  // mejor (menor duración). Se usa dos veces si hay fallback TDD → A*.
+  const runOverCandidates = (algo: RouteAlgorithm): LocalRouteResult | null => {
+    let best: LocalRouteResult | null = null;
+    for (const ec of endCandidates) {
+      const endIdx = snapToNearestNode(ec.lat, ec.lng, graph);
+      if (endIdx === null) continue;
+      const endNodeId = graph.nodes[endIdx].id;
+      let result: LocalRouteResult | null = null;
 
-    if (algorithm === 'dijkstra') {
-      result = dijkstra(graph, startNodeId, endNodeId, {
-        profile: params.profile,
-        blockedEdgeIds,
-        hazardPenalty:
-          params.emergencyType !== 'ninguna'
-            ? { ...DEFAULT_HAZARD_PENALTIES[params.emergencyType], emergencyType: params.emergencyType }
-            : undefined,
-      });
-    } else if (algorithm === 'a-star') {
-      result = aStar(graph, startNodeId, endNodeId, {
-        profile: params.profile,
-        blockedEdgeIds,
-        hazardPenalty:
-          params.emergencyType !== 'ninguna'
-            ? { ...DEFAULT_HAZARD_PENALTIES[params.emergencyType], emergencyType: params.emergencyType }
-            : undefined,
-      });
-    } else if (algorithm === 'time-dependent') {
-      if (params.emergencyType === 'ninguna') {
-        // TDD sin amenaza es equivalente a Dijkstra — caemos a A* por eficiencia
+      if (algo === 'dijkstra') {
+        result = dijkstra(graph, startNodeId, endNodeId, {
+          profile: params.profile,
+          blockedEdgeIds,
+          hazardPenalty: hazardPenaltyOpts,
+        });
+      } else if (algo === 'a-star') {
         result = aStar(graph, startNodeId, endNodeId, {
           profile: params.profile,
           blockedEdgeIds,
+          hazardPenalty: hazardPenaltyOpts,
         });
-      } else {
-        const edgeCostAt = params.arrivalMap
-          ? makeRasterBasedEdgeCost(graph, {
-              profile: params.profile,
-              arrivalMap: params.arrivalMap,
-            })
-          : makeCategoryBasedEdgeCost(graph, {
-              profile: params.profile,
-              emergencyType: params.emergencyType,
-            });
-        result = timeDependentDijkstra(graph, startNodeId, endNodeId, {
-          profile: params.profile,
-          departureTimeSeconds: params.departureTimeSeconds ?? 0,
-          edgeCostAt,
-          blockedEdgeIds,
-        });
+      } else if (algo === 'time-dependent') {
+        if (params.emergencyType === 'ninguna') {
+          // TDD sin amenaza ≡ Dijkstra — caemos a A* por eficiencia
+          result = aStar(graph, startNodeId, endNodeId, {
+            profile: params.profile,
+            blockedEdgeIds,
+          });
+        } else {
+          const edgeCostAt = params.arrivalMap
+            ? makeRasterBasedEdgeCost(graph, {
+                profile: params.profile,
+                arrivalMap: params.arrivalMap,
+              })
+            : makeCategoryBasedEdgeCost(graph, {
+                profile: params.profile,
+                emergencyType: params.emergencyType,
+              });
+          result = timeDependentDijkstra(graph, startNodeId, endNodeId, {
+            profile: params.profile,
+            departureTimeSeconds: params.departureTimeSeconds ?? 0,
+            edgeCostAt,
+            blockedEdgeIds,
+          });
+        }
+      }
+
+      if (result) {
+        result.affectedByReports = blockedEdgeIds.size > 0;
+        result.destinationName = ec.name;
+        if (!best || result.durationSeconds < best.durationSeconds) {
+          best = result;
+        }
       }
     }
+    return best;
+  };
 
-    if (result) {
-      result.affectedByReports = blockedEdgeIds.size > 0;
-      result.destinationName = ec.name;
-      if (!bestResult || result.durationSeconds < bestResult.durationSeconds) {
-        bestResult = result;
-      }
+  let bestResult = runOverCandidates(algorithm);
+
+  // Fallback "la menos mala": TDD puede devolver null si el frente alcanza
+  // todas las rutas antes que el evacuado. En ese caso relanzamos con A*
+  // + penalización de amenaza y marcamos el resultado como riesgoso. La
+  // UI debe advertir al usuario que no hay camino seguro garantizado.
+  if (
+    bestResult === null &&
+    algorithm === 'time-dependent' &&
+    params.emergencyType !== 'ninguna'
+  ) {
+    bestResult = runOverCandidates('a-star');
+    if (bestResult) {
+      bestResult.isRiskyFallback = true;
     }
   }
 

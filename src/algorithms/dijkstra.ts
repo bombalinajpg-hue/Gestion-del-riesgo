@@ -162,6 +162,7 @@ export function buildRouteResult(
     durationSeconds: dist[endIdx],
     algorithm,
     affectedByReports: false, // lo setea el caller si corresponde
+    isRiskyFallback: false, // idem — el caller lo setea si es fallback
     destinationNodeId: graph.nodes[endIdx].id,
   };
 }

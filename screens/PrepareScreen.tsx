@@ -8,8 +8,8 @@
  */
 
 import { MaterialIcons } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
-import { useEffect, useState } from "react";
+import { useFocusEffect, useRouter } from "expo-router";
+import { useCallback, useState } from "react";
 import {
   ScrollView,
   StyleSheet,
@@ -35,18 +35,22 @@ export default function PrepareScreen() {
   const [groups, setGroups] = useState(0);
 
   const refresh = async () => {
-    const prep = await loadPreparedness();
-    const progress = getPreparednessProgress(prep);
-    setPrepPct(progress.percent);
-    setPrepCount({ checked: progress.checked, total: progress.total });
-    setGroups((await getAllGroups()).length);
+    try {
+      const prep = await loadPreparedness();
+      const progress = getPreparednessProgress(prep);
+      setPrepPct(progress.percent);
+      setPrepCount({ checked: progress.checked, total: progress.total });
+      setGroups((await getAllGroups()).length);
+    } catch (e) {
+      console.warn("[PrepareScreen] refresh:", e);
+    }
   };
 
-  useEffect(() => {
-    refresh();
-    // Re-carga al enfocar la pantalla
-    return () => {};
-  }, [navigation]);
+  useFocusEffect(
+    useCallback(() => {
+      refresh();
+    }, []),
+  );
 
   const kitColor =
     prepPct >= 1 ? "#059669" : prepPct >= 0.5 ? "#eab308" : "#dc2626";

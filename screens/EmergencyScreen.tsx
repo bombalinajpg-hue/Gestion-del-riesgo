@@ -22,9 +22,20 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import FamilyGroupModal from "../components/FamilyGroupModal";
 import MissingPersonsModal from "../components/MissingPersonsModal";
 import SafetyStatusModal from "../components/SafetyStatusModal";
+import { useRouteContext } from "../context/RouteContext";
+import type { EmergencyType } from "../src/types/types";
 
 export default function EmergencyScreen() {
   const router = useRouter();
+  const {
+    setEmergencyType,
+    setDestinationMode,
+    setStartMode,
+    setStartPoint,
+    setSelectedDestination,
+    setSelectedInstitucion,
+    setQuickRouteMode,
+  } = useRouteContext();
   const [safetyOpen, setSafetyOpen] = useState(false);
   const [familyOpen, setFamilyOpen] = useState(false);
   const [missingOpen, setMissingOpen] = useState(false);
@@ -34,6 +45,62 @@ export default function EmergencyScreen() {
       { text: "Cancelar", style: "cancel" },
       { text: "Llamar", onPress: () => Linking.openURL(`tel:${num}`) },
     ]);
+
+  // Flujo rápido — pipeline en 2 preguntas para mantener el total ≤ 5 taps:
+  //   1) ¿Qué emergencia?  → setEmergencyType
+  //   2) ¿Desde dónde sales?
+  //        a) Mi ubicación → startMode=gps + destinationMode=closest +
+  //           navegamos al mapa con autoRoute=1 → el mapa dispara el
+  //           cálculo automáticamente (3 taps total).
+  //        b) Elegir en mapa → startMode=manual + vaciar startPoint +
+  //           navegamos al mapa; allá el usuario toca el mapa para fijar
+  //           el origen y recibe un tercer Alert con el método de destino.
+  const prepareState = (type: EmergencyType) => {
+    setEmergencyType(type);
+    setSelectedDestination(null);
+    setSelectedInstitucion(null);
+    setQuickRouteMode(true);
+  };
+
+  const goAuto = (type: EmergencyType) => {
+    prepareState(type);
+    setStartMode("gps");
+    setDestinationMode("closest");
+    router.push({ pathname: "/map", params: { autoRoute: "1" } });
+  };
+
+  const goManual = (type: EmergencyType) => {
+    prepareState(type);
+    setStartMode("manual");
+    setStartPoint(null);
+    setDestinationMode("manual");
+    router.push({ pathname: "/map", params: { autoOpen: "pickStart" } });
+  };
+
+  const askStartSource = (type: EmergencyType) => {
+    Alert.alert(
+      "¿Desde dónde sales?",
+      "Usa tu ubicación actual o toca el mapa para fijar un punto de inicio.",
+      [
+        { text: "📍 Mi ubicación", onPress: () => goAuto(type) },
+        { text: "🗺️ Elegir en el mapa", onPress: () => goManual(type) },
+        { text: "Cancelar", style: "cancel" },
+      ],
+    );
+  };
+
+  const askEmergencyType = () => {
+    Alert.alert(
+      "¿Qué emergencia enfrentas?",
+      "Elige el tipo de amenaza.",
+      [
+        { text: "🌊 Inundación", onPress: () => askStartSource("inundacion") },
+        { text: "⛰️ Movimiento en masa", onPress: () => askStartSource("movimiento_en_masa") },
+        { text: "🌪️ Avenida torrencial", onPress: () => askStartSource("avenida_torrencial") },
+        { text: "Cancelar", style: "cancel" },
+      ],
+    );
+  };
 
   return (
     <SafeAreaView style={styles.root} edges={["top", "bottom"]}>
@@ -66,12 +133,11 @@ export default function EmergencyScreen() {
           </View>
         </TouchableOpacity>
 
-        {/* Ruta inmediata */}
+        {/* Ruta inmediata — pregunta la emergencia y navega con el drawer
+            abierto para confirmación de 1 paso. */}
         <TouchableOpacity
           style={[styles.actionCard, { borderLeftColor: "#0f766e" }]}
-          onPress={() =>
-            router.push({ pathname: "/map", params: { autoOpen: "closest" } })
-          }
+          onPress={askEmergencyType}
           activeOpacity={0.8}
         >
           <View
@@ -82,7 +148,7 @@ export default function EmergencyScreen() {
           <View style={{ flex: 1 }}>
             <Text style={styles.actionTitle}>Calcular ruta al punto más cercano</Text>
             <Text style={styles.actionSubtitle}>
-              Selección automática según tu ubicación
+              Elige la emergencia y confirma la salida
             </Text>
           </View>
           <MaterialIcons name="chevron-right" size={22} color="#94a3b8" />

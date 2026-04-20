@@ -6,8 +6,8 @@
  */
 
 import { MaterialIcons } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
-import { useEffect, useState } from "react";
+import { useFocusEffect, useRouter } from "expo-router";
+import { useCallback, useState } from "react";
 import {
   ScrollView,
   StyleSheet,
@@ -41,14 +41,16 @@ export default function CommunityScreen() {
       setAlertCount((await getActiveBlockingAlerts()).length);
       setMissingCount((await getActiveMissing()).length);
       setGroupCount((await getAllGroups()).length);
-    } catch {}
+    } catch (e) {
+      console.warn("[CommunityScreen] refresh:", e);
+    }
   };
 
-  useEffect(() => {
-    refresh();
-    // Re-carga al enfocar la pantalla
-    return () => {};
-  }, [navigation]);
+  useFocusEffect(
+    useCallback(() => {
+      refresh();
+    }, []),
+  );
 
   return (
     <SafeAreaView style={styles.root} edges={["top", "bottom"]}>
