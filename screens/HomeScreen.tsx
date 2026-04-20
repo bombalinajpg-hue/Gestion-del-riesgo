@@ -15,7 +15,7 @@
 
 import { MaterialIcons } from "@expo/vector-icons";
 import { type Href, useFocusEffect, useRouter } from "expo-router";
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import {
   Alert,
   Linking,
@@ -26,7 +26,10 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import QuickEvacuateSheet, { type StartSource } from "../components/QuickEvacuateSheet";
+import { useRouteContext } from "../context/RouteContext";
 import { useCommunityStatus } from "../src/hooks/useCommunityStatus";
+import type { EmergencyType } from "../src/types/types";
 
 // Helper de pluralización en español. Antes vivía inline como tres
 // ternarios anidados en HomeScreen ("alerta{s} ciudadana{s} activa{s}")
@@ -113,6 +116,17 @@ export default function HomeScreen() {
   // otra pantalla, no duplicamos queries.
   const { alertCount: activeAlerts, missingCount: activeMissing, refresh } =
     useCommunityStatus();
+  const {
+    setEmergencyType,
+    setStartMode,
+    setStartPoint,
+    setDestinationMode,
+    setSelectedDestination,
+    setSelectedInstitucion,
+    setRouteProfile,
+    setQuickRouteMode,
+  } = useRouteContext();
+  const [sheetVisible, setSheetVisible] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -125,6 +139,32 @@ export default function HomeScreen() {
       { text: "Cancelar", style: "cancel" },
       { text: "Llamar", onPress: () => Linking.openURL("tel:123") },
     ]);
+  };
+
+  // El sheet de evacuación rápida devuelve las dos decisiones juntas; acá
+  // setteamos contexto y navegamos con los params que gatillan el
+  // quickRoutePipeline (Case A con `autoRoute=1` para GPS, Case B con
+  // `autoOpen=pickStart` para manual + destinationMode=closest ya
+  // pre-seteado para que salte el Alert de método).
+  const handleQuickEvacuate = (
+    emergency: Exclude<EmergencyType, "ninguna">,
+    start: StartSource,
+  ) => {
+    setSheetVisible(false);
+    setSelectedDestination(null);
+    setSelectedInstitucion(null);
+    setEmergencyType(emergency);
+    setRouteProfile("foot-walking");
+    setDestinationMode("closest");
+    setQuickRouteMode(true);
+    setStartPoint(null);
+    if (start === "gps") {
+      setStartMode("gps");
+      router.push({ pathname: "/map", params: { autoRoute: "1" } });
+    } else {
+      setStartMode("manual");
+      router.push({ pathname: "/map", params: { autoOpen: "pickStart" } });
+    }
   };
 
   return (
@@ -178,19 +218,27 @@ export default function HomeScreen() {
             </TouchableOpacity>
           )}
 
-          {/* ── CTA PRINCIPAL ─────────────────────────────────────────── */}
+          {/* ── CTA PRINCIPAL — Panic button ───────────────────────────
+              Un solo tap lanza el flujo de emergencia (Alert de tipo,
+              Alert de inicio) y auto-calcula la ruta al refugio más
+              cercano con pesos de amenaza. Rojo saturado + sombra
+              encendida para que sea identificable como "acción crítica"
+              sin aprendizaje previo — mismo lenguaje visual que el 123. */}
           <TouchableOpacity
             style={styles.ctaButton}
-            onPress={() => router.push({ pathname: "/map", params: { autoOpen: "drawer" } })}
+            onPress={() => setSheetVisible(true)}
             activeOpacity={0.85}
+            accessibilityLabel="Evacúa ahora"
+            accessibilityRole="button"
+            accessibilityHint="Pregunta el tipo de emergencia y el punto de inicio; calcula automáticamente la ruta al refugio más seguro y cercano"
           >
             <View style={styles.ctaIconWrap}>
               <MaterialIcons name="directions-run" size={28} color="#fff" />
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.ctaTitle}>Calcular ruta de evacuación</Text>
+              <Text style={styles.ctaTitle}>Evacua</Text>
               <Text style={styles.ctaSubtitle}>
-                Encuentra tu camino seguro ahora
+                Ruta al refugio más seguro y cercano
               </Text>
             </View>
             <MaterialIcons name="arrow-forward" size={22} color="#fff" />
@@ -254,13 +302,22 @@ export default function HomeScreen() {
         <MaterialIcons name="phone" size={22} color="#fff" />
         <Text style={styles.emergencyFabText}>123</Text>
       </TouchableOpacity>
+
+      <QuickEvacuateSheet
+        visible={sheetVisible}
+        onClose={() => setSheetVisible(false)}
+        onConfirm={handleQuickEvacuate}
+      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#f8fafc" },
-  scrollContent: { paddingBottom: 120 },
+  // paddingBottom reserva espacio para el 123 FAB (bottom: 24, alto ~50)
+  // + margen holgado para que la última fila del grid nunca quede tapada,
+  // ni siquiera en dispositivos con home-indicator grande.
+  scrollContent: { paddingBottom: 140 },
 
   // ─── Hero ───
   hero: {
@@ -359,19 +416,21 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
 
-  // ─── CTA principal ───
+  // ─── CTA principal (panic button) ───
+  // Rojo `#dc2626` = mismo tono que el 123 FAB para que el usuario
+  // reconozca la paleta "acción crítica / emergencia" en un vistazo.
   ctaButton: {
     flexDirection: "row",
     alignItems: "center",
     marginHorizontal: 16,
     marginTop: 16,
-    backgroundColor: "#0f766e",
+    backgroundColor: "#dc2626",
     padding: 16,
     borderRadius: 18,
     gap: 14,
-    shadowColor: "#0f766e",
+    shadowColor: "#dc2626",
     shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.3,
+    shadowOpacity: 0.4,
     shadowRadius: 12,
     elevation: 8,
   },

@@ -77,15 +77,26 @@ export default function MainMenu({ navigation }: DrawerContentComponentProps) {
     setShowingInstitucionesOverlay,
   } = useRouteContext();
 
+  // El scroll tras "CONFIRMAR PUNTO DE INICIO" se dispara en dos lugares:
+  //   1. Este efecto, con delay suficiente para que la animación del drawer
+  //      termine (el drawer nativo tarda ~300-400 ms).
+  //   2. En el `onLayout` del contenedor de destinos más abajo — si la
+  //      primera vez que se abre el drawer `destinosYRef.current` aún no
+  //      ha recibido layout, el efecto dispararía scroll a `y=0`. El
+  //      onLayout lo cubre: cuando finalmente mide, si el flag sigue
+  //      prendido, scrollea y lo apaga.
   useEffect(() => {
     if (!shouldScrollToDestinos) return;
     const t = setTimeout(() => {
-      scrollRef.current?.scrollTo({
-        y: destinosYRef.current,
-        animated: true,
-      });
-    }, 300);
-    setShouldScrollToDestinos(false);
+      if (destinosYRef.current > 0) {
+        scrollRef.current?.scrollTo({
+          y: destinosYRef.current,
+          animated: true,
+        });
+        setShouldScrollToDestinos(false);
+      }
+      // Si aún no hay layout, dejamos el flag prendido — onLayout lo atiende.
+    }, 450);
     return () => clearTimeout(t);
   }, [shouldScrollToDestinos, setShouldScrollToDestinos]);
 
@@ -319,6 +330,17 @@ export default function MainMenu({ navigation }: DrawerContentComponentProps) {
         <View
           onLayout={(e) => {
             destinosYRef.current = e.nativeEvent.layout.y;
+            // Cubre el caso de primer abrir del drawer: si al montar el
+            // flag ya estaba prendido pero `y` aún era 0, el efecto no
+            // pudo scrollear. Ahora que ya conocemos la posición, lo
+            // hacemos y apagamos el flag.
+            if (shouldScrollToDestinos) {
+              scrollRef.current?.scrollTo({
+                y: destinosYRef.current,
+                animated: true,
+              });
+              setShouldScrollToDestinos(false);
+            }
           }}
         >
           <Text style={styles.sectionHeader}>📍 Destino</Text>

@@ -39,6 +39,7 @@ export interface UseQuickRoutePipelineParams {
   destinoFinal: DestinoFinal | null;
   selectedDestination: Destino | null;
   selectedInstitucion: Institucion | null;
+  destinationMode: DestinationMode;
   pickingFromIsochroneMap: boolean;
   showingInstitucionesOverlay: boolean;
   setDestinationMode: (m: DestinationMode) => void;
@@ -58,6 +59,7 @@ export function useQuickRoutePipeline(params: UseQuickRoutePipelineParams) {
     autoRouteParam, graphReady, location,
     startMode, startPoint, emergencyType, evacuando,
     destinoFinal, selectedDestination, selectedInstitucion,
+    destinationMode,
     pickingFromIsochroneMap, showingInstitucionesOverlay,
     setDestinationMode, setPickingFromIsochroneMap,
     setShowingInstitucionesOverlay, setShowIsochroneOverlay,
@@ -75,14 +77,16 @@ export function useQuickRoutePipeline(params: UseQuickRoutePipelineParams) {
   const handlersRef = useRef({ calcularRuta, setCalculating, openGoogleMaps });
   handlersRef.current = { calcularRuta, setCalculating, openGoogleMaps };
 
-  // Caso A — autoRoute desde GPS
+  // Caso A — autoRoute desde GPS. Permite `emergencyType === "ninguna"`
+  // para el flujo panic (aún no lanzado desde acá, pero por consistencia
+  // con Case B y para no sorprender si HomeScreen agrega un path GPS sin
+  // elegir emergencia).
   useEffect(() => {
     if (autoRouteFiredRef.current) return;
     if (!quickRouteMode) return;
     if (autoRouteParam !== "1") return;
     if (!graphReady || !location) return;
     if (startMode !== "gps") return;
-    if (emergencyType === "ninguna") return;
     if (evacuando) return;
     autoRouteFiredRef.current = true;
     const t = setTimeout(() => {
@@ -96,15 +100,33 @@ export function useQuickRoutePipeline(params: UseQuickRoutePipelineParams) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [quickRouteMode, autoRouteParam, graphReady, location, startMode, emergencyType, evacuando]);
 
-  // Caso B — pickeo manual: auto-confirma y pide método de destino
+  // Caso B — pickeo manual: auto-confirma el punto de inicio y:
+  //   · Si el caller ya fijó `destinationMode === "closest"` (flujo panic
+  //     desde el FAB EVACUAR del Home), calcula inmediato sin preguntar
+  //     método de destino — "más cercano" ya fue la elección implícita.
+  //   · Si `destinationMode === "manual"` (flujo clásico desde
+  //     EmergencyScreen), muestra el Alert con los 3 métodos para que
+  //     el usuario decida.
+  //
+  // `emergencyType === "ninguna"` ya no bloquea: el nuevo flujo panic
+  // permite disparar sin amenaza (ruta más corta sin penalización).
   useEffect(() => {
     if (destMethodAskedRef.current) return;
     if (!quickRouteMode) return;
     if (startMode !== "manual") return;
     if (!startPoint) return;
-    if (emergencyType === "ninguna") return;
     destMethodAskedRef.current = true;
     setPuntoConfirmado(true);
+
+    if (destinationMode === "closest") {
+      const t = setTimeout(() => {
+        const h = handlersRef.current;
+        h.setCalculating(() => h.calcularRuta(true));
+        setQuickRouteMode(false);
+      }, 280);
+      return () => clearTimeout(t);
+    }
+
     const t = setTimeout(() => {
       Alert.alert(
         "¿Cómo eliges el destino?",
@@ -144,7 +166,7 @@ export function useQuickRoutePipeline(params: UseQuickRoutePipelineParams) {
     }, 280);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [quickRouteMode, startMode, startPoint, emergencyType]);
+  }, [quickRouteMode, startMode, startPoint, emergencyType, destinationMode]);
 
   // Caso C — destino elegido: ofrece acciones
   useEffect(() => {

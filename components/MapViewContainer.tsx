@@ -209,16 +209,14 @@ export default function MapViewContainer() {
   // aparece duplicada en la URL. Normalizamos al primer valor y validamos
   // contra los literales esperados; cualquier valor desconocido queda como
   // `undefined` para que los efectos downstream no dispararen por error.
-  const rawParams = useLocalSearchParams<{ autoOpen?: string | string[]; autoRoute?: string | string[] }>();
-  const autoOpen = (() => {
-    const v = Array.isArray(rawParams.autoOpen) ? rawParams.autoOpen[0] : rawParams.autoOpen;
-    return v === "drawer" || v === "pickStart" ? v : undefined;
-  })();
+  // `autoRoute=1` sigue siendo significativo (lo usa useQuickRoutePipeline
+  // para disparar cálculo automático desde EmergencyScreen). `autoOpen`
+  // quedó como informativo; ya no dispara navegación automática.
+  const rawParams = useLocalSearchParams<{ autoRoute?: string | string[] }>();
   const autoRoute = (() => {
     const v = Array.isArray(rawParams.autoRoute) ? rawParams.autoRoute[0] : rawParams.autoRoute;
     return v === "1" ? v : undefined;
   })();
-  const autoOpenRef = useRef(false);
 
   const puntosEncuentro = useMemo(
     () => destinos.filter((d) => d.tipo === "punto_encuentro"),
@@ -256,21 +254,13 @@ export default function MapViewContainer() {
     },
   });
 
-  // Flujo rápido desde Emergency / Home: si llegamos con `?autoOpen=drawer`,
-  // abrimos el drawer automáticamente cuando el grafo está listo para que
-  // el usuario vea los parámetros pre-seleccionados y confirme con 1 tap.
-  useEffect(() => {
-    if (autoOpenRef.current) return;
-    if (!graphReady) return;
-    if (autoOpen === "drawer") {
-      autoOpenRef.current = true;
-      // Pequeño delay para que la animación de entrada de la pantalla termine.
-      const t = setTimeout(() => {
-        navigation.dispatch(DrawerActions.openDrawer());
-      }, 250);
-      return () => clearTimeout(t);
-    }
-  }, [graphReady, autoOpen, navigation]);
+  // Antes llegar con `?autoOpen=drawer` abría el drawer automáticamente.
+  // Ahora mostramos un FAB rojo destacado (ícono de persona corriendo)
+  // para que el usuario decida cuándo abrir el menú de parámetros —
+  // aterrizar directo en el drawer se sentía como un salto sin contexto.
+  // El flag `autoOpen=drawer` sigue siendo legítimo en la URL, solo que
+  // ya no dispara nada: lo conservamos por compatibilidad con deep-links
+  // existentes (HomeScreen, widgets externos) sin cambiar su contrato.
 
   // Suscripción de GPS + heading encapsulada en useLocationTracking.
 
@@ -434,6 +424,7 @@ export default function MapViewContainer() {
     graphReady, location,
     startMode, startPoint, emergencyType, evacuando,
     destinoFinal, selectedDestination, selectedInstitucion,
+    destinationMode,
     pickingFromIsochroneMap, showingInstitucionesOverlay,
     setDestinationMode, setPickingFromIsochroneMap,
     setShowingInstitucionesOverlay, setShowIsochroneOverlay,
@@ -905,7 +896,26 @@ export default function MapViewContainer() {
         </TouchableOpacity>
       )}
 
-      {/* BOTÓN "INICIAR RUTA DE EVACUACIÓN" — cuando todos los parámetros
+      {/* FAB de configuración — abre el drawer de parámetros. Color teal
+          y ícono `tune` (perillas) para diferenciarlo de la acción de
+          evacuación real, que es el botón azul "CALCULAR RUTA" abajo.
+          Rojo quedaba para la acción panic del Home; acá el verdadero
+          disparador de ruta no es este botón sino el siguiente. */}
+      {!mostrarBotonIniciar && !evacuando && !pickingFromIsochroneMap && !showingInstitucionesOverlay && (
+        <TouchableOpacity
+          style={styles.configurarRutaFab}
+          onPress={() => navigation.dispatch(DrawerActions.openDrawer())}
+          activeOpacity={0.85}
+          accessibilityLabel="Configurar parámetros de la ruta de evacuación"
+          accessibilityRole="button"
+          accessibilityHint="Abre el menú para elegir tipo de emergencia, perfil y punto de partida"
+        >
+          <MaterialIcons name="tune" size={22} color="#fff" />
+          <Text style={styles.configurarRutaFabText}>CONFIGURAR</Text>
+        </TouchableOpacity>
+      )}
+
+      {/* BOTÓN "CALCULAR RUTA DE EVACUACIÓN" — cuando todos los parámetros
           están listos (destinoFinal o closest+preview). */}
       {mostrarBotonIniciar && (
         <Animated.View
@@ -1032,6 +1042,28 @@ const styles = StyleSheet.create({
     alignItems: "center", justifyContent: "center",
     shadowColor: "#ef476f", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 8, elevation: 8,
   },
+  // FAB "Configurar" — teal `#0f766e` para comunicar "acción secundaria,
+  // tranquila, de configuración". El rojo queda reservado para acciones
+  // de pánico (Home CTA "Evacua" + 123). Pill bottom-center.
+  configurarRutaFab: {
+    position: "absolute",
+    bottom: 170,
+    alignSelf: "center",
+    zIndex: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "#0f766e",
+    paddingHorizontal: 22,
+    paddingVertical: 14,
+    borderRadius: 30,
+    shadowColor: "#0f766e",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.35,
+    shadowRadius: 12,
+    elevation: 10,
+  },
+  configurarRutaFabText: { color: "#fff", fontWeight: "800", fontSize: 16, letterSpacing: 0.5 },
   isochroneInfoBanner: {
     backgroundColor: "rgba(255,255,255,0.95)",
     paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12,
