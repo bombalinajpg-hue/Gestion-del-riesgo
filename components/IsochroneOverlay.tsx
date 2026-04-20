@@ -48,16 +48,19 @@ export default function IsochroneOverlay({ graph, table }: Props) {
   const circles: React.ReactElement[] = [];
 
   // Extraer valores de la tabla. Soporta ambas estructuras posibles:
-  //   - table.entries[idx] = { timeSeconds, destinationName, ... }
-  //   - table.bestTime[idx] = seconds (formato antiguo)
+  //   - table.entries[idx] = { timeSeconds, destinationName, ... } (actual)
+  //   - table.bestTime[idx] = seconds (formato antiguo, archivos cacheados
+  //     de versiones previas que aún pueden estar en AsyncStorage).
+  type LegacyEntry = number;
+  type LegacyTable = { bestTime?: number[] };
   const getSeconds = (i: number): number | null => {
-    const t = table as any;
-    if (t.entries && t.entries[i]) {
-      const e = t.entries[i];
-      if (typeof e === 'number') return isFinite(e) ? e : null;
-      if (e.timeSeconds !== undefined) return isFinite(e.timeSeconds) ? e.timeSeconds : null;
+    const t = table as IsochroneTable & LegacyTable;
+    const entry = t.entries?.[i] as undefined | LegacyEntry | { timeSeconds?: number };
+    if (typeof entry === 'number') return isFinite(entry) ? entry : null;
+    if (entry && typeof entry === 'object' && typeof entry.timeSeconds === 'number') {
+      return isFinite(entry.timeSeconds) ? entry.timeSeconds : null;
     }
-    if (t.bestTime && t.bestTime[i] !== undefined) {
+    if (t.bestTime && typeof t.bestTime[i] === 'number') {
       const v = t.bestTime[i];
       return isFinite(v) ? v : null;
     }

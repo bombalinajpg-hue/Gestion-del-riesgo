@@ -53,7 +53,7 @@ export default function StreetViewModal({
   const insets = useSafeAreaInsets();
   const [loading, setLoading] = useState(true);
   const [timedOut, setTimedOut] = useState(false);
-  const timerRef = useRef<any>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const openExternal = () => {
     const url = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${latitude},${longitude}`;

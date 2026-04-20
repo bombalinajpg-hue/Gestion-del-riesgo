@@ -12,6 +12,7 @@
  */
 
 import type { Graph, GraphNode, GraphEdge } from '../types/graph';
+import { invalidateSnapIndex } from '../utils/snapToGraph';
 
 /**
  * Raw del JSON — no trae los índices. Los construimos al cargar.
@@ -32,6 +33,23 @@ let cachedGraph: Graph | null = null;
  * `rawGraph` es el resultado de `require('../../data/graph.json')` en
  * el caller, para que Metro bundler lo incluya en el APK.
  */
+/**
+ * Carga el grafo desde el bundle via dynamic import. Diferencia frente a
+ * `loadGraph(require(...))`: el JSON de 2.2 MB no se parsea al arrancar
+ * la app sino cuando el primer caller (normalmente `useGraphBootstrap`)
+ * invoca esta función. Metro lo tratará como chunk diferido cuando sea
+ * posible; incluso si lo inlinea, la creación del objeto JS a partir del
+ * string JSON ocurre al await, no al import del módulo.
+ *
+ * Dedup: tras la primera llamada, `cachedGraph` está seteado y las
+ * llamadas siguientes devuelven el mismo grafo sin volver a parsear.
+ */
+export async function loadGraphFromBundle(): Promise<Graph> {
+  if (cachedGraph) return cachedGraph;
+  const mod = await import("../../data/graph.json");
+  return loadGraph(mod.default as unknown as RawGraph);
+}
+
 export function loadGraph(rawGraph: RawGraph): Graph {
   if (cachedGraph) return cachedGraph;
 
@@ -105,9 +123,13 @@ export function getGraph(): Graph {
   return cachedGraph;
 }
 
-/** Para tests — permite resetear el singleton */
+/** Para tests — permite resetear el singleton. También invalida el índice
+ * de snap porque su cache está keyed por identidad del grafo; sin esto
+ * un snap posterior podría encontrar `graphRef !== newGraph` y rebuild
+ * correcto, pero ser explícito evita sorpresas si la lógica cambia. */
 export function __resetGraphCache(): void {
   cachedGraph = null;
+  invalidateSnapIndex();
 }
 
 function computeBbox(nodes: GraphNode[]): Graph['bbox'] {

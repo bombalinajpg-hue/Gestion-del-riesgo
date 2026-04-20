@@ -19,10 +19,26 @@
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { serializeByKey } from '../utils/asyncQueue';
 import { getDeviceId } from './reportsService';
 import type { FamilyGroup, FamilyMember } from '../types/v4';
 
 const STORAGE_KEY = 'family_groups_v1';
+// El usuario no pertenece a muchos grupos; 50 es holgado.
+const MAX_STORED_GROUPS = 50;
+
+function isValidGroup(x: unknown): x is FamilyGroup {
+  if (!x || typeof x !== 'object') return false;
+  const g = x as Record<string, unknown>;
+  return (
+    typeof g.code === 'string' &&
+    typeof g.name === 'string' &&
+    typeof g.createdAt === 'string' &&
+    typeof g.isOwner === 'boolean' &&
+    typeof g.myName === 'string' &&
+    Array.isArray(g.members)
+  );
+}
 
 /** Genera código corto de 6 chars sin caracteres confundibles (O/0, I/1, etc.) */
 function generateGroupCode(): string {
@@ -37,14 +53,24 @@ function generateGroupCode(): string {
 async function loadRaw(): Promise<FamilyGroup[]> {
   try {
     const raw = await AsyncStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as FamilyGroup[]) : [];
-  } catch {
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(isValidGroup);
+  } catch (e) {
+    console.warn('[familyGroupsService] loadRaw:', e);
     return [];
   }
 }
 
 async function saveRaw(groups: FamilyGroup[]): Promise<void> {
-  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(groups));
+  const capped = groups.length > MAX_STORED_GROUPS
+    ? [...groups]
+        .sort((a, b) =>
+          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        .slice(0, MAX_STORED_GROUPS)
+    : groups;
+  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(capped));
 }
 
 export async function getAllGroups(): Promise<FamilyGroup[]> {
@@ -63,25 +89,27 @@ export interface CreateGroupInput {
 
 export async function createGroup(input: CreateGroupInput): Promise<FamilyGroup> {
   const deviceId = await getDeviceId();
-  const code = generateGroupCode();
-  const group: FamilyGroup = {
-    code,
-    name: input.name.trim(),
-    createdAt: new Date().toISOString(),
-    isOwner: true,
-    myName: input.myName.trim(),
-    members: [
-      {
-        deviceId,
-        name: input.myName.trim(),
-        status: 'unknown',
-      },
-    ],
-  };
-  const groups = await loadRaw();
-  groups.push(group);
-  await saveRaw(groups);
-  return group;
+  return serializeByKey(STORAGE_KEY, async () => {
+    const code = generateGroupCode();
+    const group: FamilyGroup = {
+      code,
+      name: input.name.trim(),
+      createdAt: new Date().toISOString(),
+      isOwner: true,
+      myName: input.myName.trim(),
+      members: [
+        {
+          deviceId,
+          name: input.myName.trim(),
+          status: 'unknown',
+        },
+      ],
+    };
+    const groups = await loadRaw();
+    groups.push(group);
+    await saveRaw(groups);
+    return group;
+  });
 }
 
 export interface JoinGroupInput {
@@ -93,72 +121,76 @@ export interface JoinGroupInput {
 export async function joinGroup(input: JoinGroupInput): Promise<FamilyGroup> {
   const deviceId = await getDeviceId();
   const code = input.code.toUpperCase().trim();
-  const groups = await loadRaw();
+  return serializeByKey(STORAGE_KEY, async () => {
+    const groups = await loadRaw();
 
-  const existing = groups.find((g) => g.code === code);
-  if (existing) {
-    // Ya estábamos en este grupo; actualizar nombre
-    const idx = existing.members.findIndex((m) => m.deviceId === deviceId);
-    if (idx !== -1) existing.members[idx].name = input.myName.trim();
-    else
-      existing.members.push({
-        deviceId,
-        name: input.myName.trim(),
-        status: 'unknown',
-      });
-    existing.myName = input.myName.trim();
+    const existing = groups.find((g) => g.code === code);
+    if (existing) {
+      const idx = existing.members.findIndex((m) => m.deviceId === deviceId);
+      if (idx !== -1) existing.members[idx].name = input.myName.trim();
+      else
+        existing.members.push({
+          deviceId,
+          name: input.myName.trim(),
+          status: 'unknown',
+        });
+      existing.myName = input.myName.trim();
+      await saveRaw(groups);
+      return existing;
+    }
+
+    const group: FamilyGroup = {
+      code,
+      name: `Grupo ${code}`,
+      createdAt: new Date().toISOString(),
+      isOwner: false,
+      myName: input.myName.trim(),
+      members: [
+        {
+          deviceId,
+          name: input.myName.trim(),
+          status: 'unknown',
+        },
+      ],
+    };
+    groups.push(group);
     await saveRaw(groups);
-    return existing;
-  }
-
-  // Crear entrada local del grupo con nosotros como primer miembro
-  // visible. Cuando haya backend, aquí se haría el fetch de los demás
-  // miembros usando el código.
-  const group: FamilyGroup = {
-    code,
-    name: `Grupo ${code}`,
-    createdAt: new Date().toISOString(),
-    isOwner: false,
-    myName: input.myName.trim(),
-    members: [
-      {
-        deviceId,
-        name: input.myName.trim(),
-        status: 'unknown',
-      },
-    ],
-  };
-  groups.push(group);
-  await saveRaw(groups);
-  return group;
+    return group;
+  });
 }
 
 export async function leaveGroup(code: string): Promise<void> {
-  const groups = await loadRaw();
-  const filtered = groups.filter((g) => g.code !== code.toUpperCase());
-  await saveRaw(filtered);
+  await serializeByKey(STORAGE_KEY, async () => {
+    const groups = await loadRaw();
+    const filtered = groups.filter((g) => g.code !== code.toUpperCase());
+    await saveRaw(filtered);
+  });
 }
 
 /**
  * Actualiza MI ubicación y estado en un grupo específico.
- * En una versión con backend, esto haría push al realtime channel.
+ * Serializado — si dos updates ocurren simultáneamente (ej. el usuario
+ * tocó dos botones de estado muy rápido), el segundo lee la versión
+ * ya modificada por el primero.
  */
 export async function updateMyLocation(
   groupCode: string,
   update: { lat?: number; lng?: number; status?: FamilyMember['status'] },
 ): Promise<FamilyGroup | null> {
   const deviceId = await getDeviceId();
-  const groups = await loadRaw();
-  const group = groups.find((g) => g.code === groupCode.toUpperCase());
-  if (!group) return null;
-  const member = group.members.find((m) => m.deviceId === deviceId);
-  if (!member) return null;
-  if (update.lat !== undefined) member.lat = update.lat;
-  if (update.lng !== undefined) member.lng = update.lng;
-  if (update.status !== undefined) member.status = update.status;
-  member.lastUpdatedAt = new Date().toISOString();
-  await saveRaw(groups);
-  return group;
+  return serializeByKey(STORAGE_KEY, async () => {
+    const groups = await loadRaw();
+    const group = groups.find((g) => g.code === groupCode.toUpperCase());
+    if (!group) return null;
+    const member = group.members.find((m) => m.deviceId === deviceId);
+    if (!member) return null;
+    if (update.lat !== undefined) member.lat = update.lat;
+    if (update.lng !== undefined) member.lng = update.lng;
+    if (update.status !== undefined) member.status = update.status;
+    member.lastUpdatedAt = new Date().toISOString();
+    await saveRaw(groups);
+    return group;
+  });
 }
 
 /**

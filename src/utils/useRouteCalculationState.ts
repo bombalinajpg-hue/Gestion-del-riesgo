@@ -14,11 +14,15 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 const SHOW_DELAY_MS = 250;   // no mostrar si termina antes
 const MIN_VISIBLE_MS = 500;  // una vez mostrado, mínimo tiempo visible
 
+// En React Native `setTimeout` devuelve `number` (Node types lo tipan como
+// `NodeJS.Timeout`). Usamos el tipo devuelto directamente para evitar `any`.
+type TimerHandle = ReturnType<typeof setTimeout>;
+
 export function useRouteCalculationState() {
   const [isCalculating, setIsCalculating] = useState(false);
-  const timers = useRef<Map<string, any>>(new Map());
-  const showTimerRef = useRef<any>(null);
-  const hideTimerRef = useRef<any>(null);
+  const timers = useRef<Map<string, TimerHandle>>(new Map());
+  const showTimerRef = useRef<TimerHandle | null>(null);
+  const hideTimerRef = useRef<TimerHandle | null>(null);
   const shownAtRef = useRef<number | null>(null);
 
   // Limpieza al desmontar

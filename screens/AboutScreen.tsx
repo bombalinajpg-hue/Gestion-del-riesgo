@@ -16,8 +16,12 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+// Nombre válido del set MaterialIcons — garantiza que un typo en la
+// cadena "icon" explote en TS y no en runtime (ícono fantasma).
+type MaterialIconName = React.ComponentProps<typeof MaterialIcons>["name"];
+
 interface Section {
-  icon: string;
+  icon: MaterialIconName;
   title: string;
   body: string;
 }
@@ -188,7 +192,7 @@ function Card({
   return (
     <View style={styles.card}>
       <View style={[styles.cardIconWrap, { backgroundColor: bg }]}>
-        <MaterialIcons name={icon as any} size={22} color={color} />
+        <MaterialIcons name={icon} size={22} color={color} />
       </View>
       <View style={{ flex: 1 }}>
         <Text style={styles.cardTitle}>{title}</Text>

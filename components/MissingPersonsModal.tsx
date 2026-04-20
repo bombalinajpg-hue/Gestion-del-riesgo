@@ -40,6 +40,7 @@ import {
 } from '../src/services/missingPersonsService';
 import { getDeviceId } from '../src/services/reportsService';
 import type { MissingPerson } from '../src/types/v4';
+import { isValidPhone } from '../src/utils/validation';
 
 interface Props {
   visible: boolean;
@@ -304,7 +305,7 @@ function ReportForm({ onSubmitted }: { onSubmitted: () => Promise<void> }) {
     name.trim().length > 1 &&
     description.trim().length > 3 &&
     contactName.trim().length > 1 &&
-    contactPhone.trim().length >= 7 &&
+    isValidPhone(contactPhone) &&
     location !== null;
 
   const handleSubmit = async () => {

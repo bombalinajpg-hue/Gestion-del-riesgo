@@ -29,31 +29,18 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import IsochroneLegend from "../components/IsochroneLegend";
 import IsochroneOverlay from "../components/IsochroneOverlay";
 import destinosJson from "../data/destinos.json";
-import rawGraph from "../data/graph.json";
 import institucionesJson from "../data/instituciones.json";
-import {
-  getGraph,
-  linkDestinations,
-  loadGraph,
-  type RawGraph,
-} from "../src/services/graphService";
+import { useCommunityStatus } from "../src/hooks/useCommunityStatus";
+import { useGraphBootstrap } from "../src/hooks/useGraphBootstrap";
+import { getGraph } from "../src/services/graphService";
 import { precomputeIsochrones } from "../src/services/isochroneService";
-import { getActiveMissing } from "../src/services/missingPersonsService";
-import {
-  getActiveBlockingAlerts,
-  recomputePublicAlerts,
-} from "../src/services/reportsService";
-import type { IsochroneTable, PublicAlert } from "../src/types/graph";
+import type { IsochroneTable } from "../src/types/graph";
 import type { Destino, EmergencyType, Institucion } from "../src/types/types";
-import type { MissingPerson } from "../src/types/v4";
 import { DEV_MOCK_LOCATION, MOCK_LOCATION_COORDS } from "../src/utils/devMock";
-import { prewarmSnapIndex, snapToNearestNode } from "../src/utils/snapToGraph";
 
 const destinos = destinosJson as Destino[];
 const instituciones = institucionesJson as Institucion[];
 const puntosEncuentro = destinos.filter((d) => d.tipo === "punto_encuentro");
-
-type LinkedDestino = Destino & { graphNodeId: number };
 
 const EMERGENCY_OPTIONS: { label: string; value: EmergencyType; emoji: string }[] = [
   { label: "Ninguna", value: "ninguna", emoji: "—" },
@@ -66,12 +53,11 @@ export default function DatosVisorScreen() {
   const router = useRouter();
   const mapRef = useRef<MapView>(null);
 
-  // ─── Data ────────────────────────────────────────────────────────────────
-  const [graphReady, setGraphReady] = useState(false);
-  const [linkedDestinos, setLinkedDestinos] = useState<LinkedDestino[]>([]);
+  // Grafo + snap encapsulados en hook.
+  const { graphReady, linkedDestinos } = useGraphBootstrap(puntosEncuentro);
   const [userLocation, setUserLocation] = useState<Location.LocationObjectCoords | null>(null);
-  const [alerts, setAlerts] = useState<PublicAlert[]>([]);
-  const [missing, setMissing] = useState<MissingPerson[]>([]);
+  // Alertas + desaparecidos compartidos con el resto de la app via cache.
+  const { alerts, missing, refresh: refreshCommunity } = useCommunityStatus();
 
   // ─── UI state ────────────────────────────────────────────────────────────
   const [emergencyType, setEmergencyType] = useState<EmergencyType>("inundacion");
@@ -81,25 +67,6 @@ export default function DatosVisorScreen() {
   const [showMissing, setShowMissing] = useState(true);
   const [isoTable, setIsoTable] = useState<IsochroneTable | null>(null);
   const [isoComputing, setIsoComputing] = useState(false);
-
-  // ─── Bootstrap: grafo + snap de destinos ─────────────────────────────────
-  useEffect(() => {
-    try {
-      loadGraph(rawGraph as unknown as RawGraph);
-      const g = getGraph();
-      prewarmSnapIndex(g);
-      try { linkDestinations(puntosEncuentro); } catch {}
-      const linked: LinkedDestino[] = puntosEncuentro.flatMap((d) => {
-        const idx = snapToNearestNode(d.lat, d.lng, g);
-        if (idx === null) return [];
-        return [{ ...d, graphNodeId: g.nodes[idx].id }];
-      });
-      setLinkedDestinos(linked);
-      setGraphReady(true);
-    } catch (e) {
-      console.warn("[Visor] bootstrap:", e);
-    }
-  }, []);
 
   // ─── Ubicación actual del usuario (solo para el marker, sin tracking) ────
   useEffect(() => {
@@ -148,21 +115,11 @@ export default function DatosVisorScreen() {
     return () => { cancelled = true; };
   }, [graphReady, linkedDestinos, emergencyType]);
 
-  // ─── Carga de alertas + desaparecidos al enfocar ─────────────────────────
-  const refreshLive = useCallback(async () => {
-    try {
-      await recomputePublicAlerts();
-      setAlerts(await getActiveBlockingAlerts());
-      setMissing(await getActiveMissing());
-    } catch (e) {
-      console.warn("[Visor] refreshLive:", e);
-    }
-  }, []);
-
+  // Refrescamos alertas al enfocar (recompute para ver clusters nuevos).
   useFocusEffect(
     useCallback(() => {
-      refreshLive();
-    }, [refreshLive]),
+      refreshCommunity({ recompute: true, maxAgeMs: 5_000 });
+    }, [refreshCommunity]),
   );
 
   // ─── Derivados ───────────────────────────────────────────────────────────
@@ -369,9 +326,11 @@ function labelForAlert(type: string): string {
   }
 }
 
+type MaterialIconName = React.ComponentProps<typeof MaterialIcons>["name"];
+
 interface ToggleChipProps {
   label: string;
-  icon: string;
+  icon: MaterialIconName;
   active: boolean;
   onPress: () => void;
   disabled?: boolean;
@@ -390,7 +349,7 @@ function ToggleChip({ label, icon, active, onPress, disabled, badge }: ToggleChi
       disabled={disabled}
     >
       <MaterialIcons
-        name={icon as any}
+        name={icon}
         size={14}
         color={disabled ? "#9ca3af" : active ? "#fff" : "#334155"}
       />
@@ -415,7 +374,7 @@ function ToggleChip({ label, icon, active, onPress, disabled, badge }: ToggleChi
 interface MetricCardProps {
   value: string;
   label: string;
-  icon: string;
+  icon: MaterialIconName;
   color: string;
   bg: string;
 }
@@ -423,7 +382,7 @@ interface MetricCardProps {
 function MetricCard({ value, label, icon, color, bg }: MetricCardProps) {
   return (
     <View style={[styles.metricCard, { backgroundColor: bg }]}>
-      <MaterialIcons name={icon as any} size={22} color={color} />
+      <MaterialIcons name={icon} size={22} color={color} />
       <Text style={[styles.metricValue, { color }]}>{value}</Text>
       <Text style={styles.metricLabel}>{label}</Text>
     </View>

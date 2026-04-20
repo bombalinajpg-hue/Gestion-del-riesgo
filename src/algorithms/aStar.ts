@@ -25,15 +25,22 @@ import { buildRouteResult, type DijkstraOptions } from './dijkstra';
 import { MinHeap } from './MinHeap';
 
 /**
- * Velocidad máxima asumida por perfil, en m/s.
- * Usada SOLO para la heurística (nunca para el costo real, que viene del grafo).
- * Al sobrestimar ligeramente la velocidad → subestima el tiempo → heurística
- * admisible. Valores conservadores a propósito.
+ * Velocidad MÁXIMA posible por perfil, en m/s. Usada SOLO para la
+ * heurística (nunca para el costo real, que viene del grafo).
+ *
+ * Para que A* sea admisible, max_speed debe ser ≥ velocidad real máxima
+ * que el usuario pueda alcanzar. Si se subestima, la heurística
+ * sobrestima el tiempo y A* puede perder el óptimo.
+ *
+ * En evacuación real los peatones corren — hasta ~4 m/s (14 km/h) en
+ * pánico. Por eso el valor aquí cubre "correr", no solo caminar. Antes
+ * estaba en 1.8 m/s, lo que violaba admisibilidad cuando el usuario
+ * corría.
  */
 const MAX_SPEED_MPS: Record<RouteProfile, number> = {
-  'foot-walking': 1.8, // ~6.5 km/h corriendo relajado
-  'cycling-regular': 6.0, // ~21.6 km/h
-  'driving-car': 16.0, // ~57.6 km/h (urbano con trafico)
+  'foot-walking': 4.0,    // ~14 km/h cubre correr en pánico
+  'cycling-regular': 8.0, // ~29 km/h cubre pedaleo enérgico
+  'driving-car': 22.0,    // ~79 km/h cubre urbano rápido
 };
 
 export function aStar(

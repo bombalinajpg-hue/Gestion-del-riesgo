@@ -21,11 +21,31 @@ import type {
   ReportSeverity,
   ReportType,
 } from "../types/graph";
+import { serializeByKey } from "../utils/asyncQueue";
 import { haversineMeters } from "../utils/haversine";
+import { persistPhoto } from "../utils/photoStorage";
+import { isValidCoord } from "../utils/validation";
 
 const REPORTS_KEY = "citizen_reports_v2"; // v2 — cambió el schema
 const ALERTS_KEY = "public_alerts_v2";
 const DEVICE_ID_KEY = "device_id_v1";
+// Cap: evita que el storage crezca sin límite. ~30 días de reportes con
+// rate-limit de 1 cada 10 min = ~4320 reportes máximo. 2000 es holgado
+// y acota el tamaño de serialización.
+const MAX_STORED_REPORTS = 2000;
+
+function isValidReport(x: unknown): x is CitizenReport {
+  if (!x || typeof x !== "object") return false;
+  const r = x as Record<string, unknown>;
+  return (
+    typeof r.id === "string" &&
+    typeof r.type === "string" &&
+    typeof r.lat === "number" &&
+    typeof r.lng === "number" &&
+    typeof r.createdAt === "string" &&
+    typeof r.deviceId === "string"
+  );
+}
 
 export const CLUSTER_PARAMS = {
   radiusMeters: 30,
@@ -67,14 +87,27 @@ function generateUuid(): string {
 async function loadReports(): Promise<CitizenReport[]> {
   try {
     const raw = await AsyncStorage.getItem(REPORTS_KEY);
-    return raw ? (JSON.parse(raw) as CitizenReport[]) : [];
-  } catch {
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    // Filtra entradas malformadas (schema change, corrupción, edición manual).
+    return parsed.filter(isValidReport);
+  } catch (e) {
+    console.warn("[reportsService] loadReports:", e);
     return [];
   }
 }
 
 async function saveReports(reports: CitizenReport[]): Promise<void> {
-  await AsyncStorage.setItem(REPORTS_KEY, JSON.stringify(reports));
+  // Si excedemos el cap, mantenemos los más recientes. Los viejos ya no
+  // tienen impacto en la ventana de cluster (3 h) ni en el TTL (12 h).
+  const capped = reports.length > MAX_STORED_REPORTS
+    ? [...reports]
+        .sort((a, b) =>
+          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        .slice(0, MAX_STORED_REPORTS)
+    : reports;
+  await AsyncStorage.setItem(REPORTS_KEY, JSON.stringify(capped));
 }
 
 export async function getAllReports(): Promise<CitizenReport[]> {
@@ -84,13 +117,20 @@ export async function getAllReports(): Promise<CitizenReport[]> {
 export async function getAllPublicAlerts(): Promise<PublicAlert[]> {
   try {
     const raw = await AsyncStorage.getItem(ALERTS_KEY);
-    const alerts = raw ? (JSON.parse(raw) as PublicAlert[]) : [];
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
     const now = Date.now();
-    return alerts.filter(
-      (a) =>
-        now - new Date(a.lastReportAt).getTime() < CLUSTER_PARAMS.alertTtlMs,
-    );
-  } catch {
+    return parsed.filter((a): a is PublicAlert => {
+      if (!a || typeof a !== "object") return false;
+      const alert = a as Record<string, unknown>;
+      if (typeof alert.id !== "string") return false;
+      if (typeof alert.lat !== "number" || typeof alert.lng !== "number") return false;
+      if (typeof alert.lastReportAt !== "string") return false;
+      return now - new Date(alert.lastReportAt).getTime() < CLUSTER_PARAMS.alertTtlMs;
+    });
+  } catch (e) {
+    console.warn("[reportsService] getAllPublicAlerts:", e);
     return [];
   }
 }
@@ -116,54 +156,61 @@ export interface SubmitReportResult {
 export async function submitReport(
   input: SubmitReportInput,
 ): Promise<SubmitReportResult> {
-  if (
-    !isFinite(input.lat) ||
-    !isFinite(input.lng) ||
-    Math.abs(input.lat) > 90 ||
-    Math.abs(input.lng) > 180
-  ) {
+  if (!isValidCoord(input.lat, input.lng)) {
     return { ok: false, reason: "invalid_coords" };
   }
 
   const deviceId = await getDeviceId();
-  const now = Date.now();
-  const reports = await loadReports();
+  // Copiamos la foto (si la hay) a almacenamiento persistente ANTES de
+  // entrar a la sección crítica. El copy es idempotente y la sección
+  // crítica solo debe contener operaciones de storage rápidas.
+  const persistedPhoto = await persistPhoto(input.photoUri);
+  // Serializa load-modify-save sobre REPORTS_KEY: si dos taps rápidos o
+  // dos submits paralelos ocurren, el segundo espera al primero y ve la
+  // versión fresca del storage antes de mutarla.
+  const result = await serializeByKey(REPORTS_KEY, async () => {
+    const now = Date.now();
+    const reports = await loadReports();
 
-  const recentSameDevice = reports.find(
-    (r) =>
-      r.deviceId === deviceId &&
-      r.type === input.type &&
-      now - new Date(r.createdAt).getTime() < CLUSTER_PARAMS.deviceCooldownMs &&
-      haversineMeters(r.lat, r.lng, input.lat, input.lng) <
-        CLUSTER_PARAMS.cooldownRadiusMeters,
-  );
-  if (recentSameDevice) {
-    return { ok: false, reason: "rate_limited" };
-  }
+    const recentSameDevice = reports.find(
+      (r) =>
+        r.deviceId === deviceId &&
+        r.type === input.type &&
+        now - new Date(r.createdAt).getTime() < CLUSTER_PARAMS.deviceCooldownMs &&
+        haversineMeters(r.lat, r.lng, input.lat, input.lng) <
+          CLUSTER_PARAMS.cooldownRadiusMeters,
+    );
+    if (recentSameDevice) {
+      return { ok: false as const, reason: "rate_limited" as const };
+    }
 
-  const report: CitizenReport = {
-    id: generateUuid(),
-    type: input.type,
-    lat: input.lat,
-    lng: input.lng,
-    createdAt: new Date(now).toISOString(),
-    deviceId,
-    note: input.note?.slice(0, 200),
-    severity: input.severity,
-    photoUri: input.photoUri,
-    status: "pendiente",
-    confirmationCount: 1,
-  };
+    const report: CitizenReport = {
+      id: generateUuid(),
+      type: input.type,
+      lat: input.lat,
+      lng: input.lng,
+      createdAt: new Date(now).toISOString(),
+      deviceId,
+      note: input.note?.slice(0, 200),
+      severity: input.severity,
+      photoUri: persistedPhoto,
+      status: "pendiente",
+      confirmationCount: 1,
+    };
 
-  reports.push(report);
-  await saveReports(reports);
+    reports.push(report);
+    await saveReports(reports);
+    return { ok: true as const, report };
+  });
+
+  if (!result.ok) return result;
 
   const newAlerts = await recomputePublicAlerts();
-  const matching = newAlerts.find((a) => a.reportIds.includes(report.id));
+  const matching = newAlerts.find((a) => a.reportIds.includes(result.report.id));
 
   return {
     ok: true,
-    report,
+    report: result.report,
     newPublicAlert:
       matching && matching.supportCount >= CLUSTER_PARAMS.minUniqueDevices
         ? matching
@@ -174,6 +221,7 @@ export async function submitReport(
 // ─── Clustering ─────────────────────────────────────────────────────────────
 
 export async function recomputePublicAlerts(): Promise<PublicAlert[]> {
+  return serializeByKey(ALERTS_KEY, async () => {
   const reports = await loadReports();
   const now = Date.now();
 
@@ -234,6 +282,7 @@ export async function recomputePublicAlerts(): Promise<PublicAlert[]> {
 
   await AsyncStorage.setItem(ALERTS_KEY, JSON.stringify(alerts));
   return alerts;
+  });
 }
 
 function aggregateSeverity(
@@ -259,23 +308,88 @@ function aggregateSeverity(
   return "leve";
 }
 
+// Indexamos centroides de clusters por grid espacial (celda ≥ radio + margen)
+// para que cada reporte consulte solo las 9 celdas vecinas. También mantenemos
+// los centroides en una estructura incremental: al agregar un reporte, el
+// centroide nuevo es `(old * n + r) / (n+1)`, sin re-sumar todo el cluster.
+//
+// Complejidad: O(N · k) donde k = clusters típicos en un vecindario (O(1)
+// en la práctica). Para 500 reportes baja de ~250k operaciones a unos
+// pocos miles, eliminando el bloqueo de UI post-submit.
 function clusterByRadius(
   reports: CitizenReport[],
   radiusMeters: number,
 ): CitizenReport[][] {
   const clusters: CitizenReport[][] = [];
+  const centroids: { lat: number; lng: number }[] = [];
+  const cellOf: string[] = []; // celda actual de cada cluster
+  const cellSizeDeg = (radiusMeters * 1.1) / 111_000;
+  const grid = new Map<string, number[]>();
+
+  const cellKey = (lat: number, lng: number) =>
+    `${Math.floor(lat / cellSizeDeg)}:${Math.floor(lng / cellSizeDeg)}`;
+
   for (const r of reports) {
-    let placed = false;
-    for (const cluster of clusters) {
-      const c = centroidOf(cluster);
-      if (haversineMeters(c.lat, c.lng, r.lat, r.lng) <= radiusMeters) {
-        cluster.push(r);
-        placed = true;
-        break;
+    const cx = Math.floor(r.lat / cellSizeDeg);
+    const cy = Math.floor(r.lng / cellSizeDeg);
+    let placedIdx = -1;
+
+    outer: for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        const bucket = grid.get(`${cx + dx}:${cy + dy}`);
+        if (!bucket) continue;
+        for (const idx of bucket) {
+          const c = centroids[idx];
+          if (haversineMeters(c.lat, c.lng, r.lat, r.lng) <= radiusMeters) {
+            placedIdx = idx;
+            break outer;
+          }
+        }
       }
     }
-    if (!placed) clusters.push([r]);
+
+    if (placedIdx === -1) {
+      const idx = clusters.length;
+      clusters.push([r]);
+      centroids.push({ lat: r.lat, lng: r.lng });
+      const key = cellKey(r.lat, r.lng);
+      cellOf.push(key);
+      let bucket = grid.get(key);
+      if (!bucket) {
+        bucket = [];
+        grid.set(key, bucket);
+      }
+      bucket.push(idx);
+    } else {
+      const cluster = clusters[placedIdx];
+      const n = cluster.length;
+      cluster.push(r);
+      // Centroide incremental — sin recorrer el cluster entero.
+      const c = centroids[placedIdx];
+      const newLat = (c.lat * n + r.lat) / (n + 1);
+      const newLng = (c.lng * n + r.lng) / (n + 1);
+      centroids[placedIdx] = { lat: newLat, lng: newLng };
+
+      // Si el centroide migró a otra celda, re-indexar.
+      const newKey = cellKey(newLat, newLng);
+      const oldKey = cellOf[placedIdx];
+      if (newKey !== oldKey) {
+        const oldBucket = grid.get(oldKey);
+        if (oldBucket) {
+          const pos = oldBucket.indexOf(placedIdx);
+          if (pos !== -1) oldBucket.splice(pos, 1);
+        }
+        let newBucket = grid.get(newKey);
+        if (!newBucket) {
+          newBucket = [];
+          grid.set(newKey, newBucket);
+        }
+        newBucket.push(placedIdx);
+        cellOf[placedIdx] = newKey;
+      }
+    }
   }
+
   return clusters;
 }
 
@@ -299,13 +413,43 @@ const BLOCKING_TYPES = new Set<ReportType>([
   "riesgo_electrico",
 ]);
 
+// Grid espacial: indexa alertas por celdas cuadradas ≥ radio, para que
+// cada arista consulte solo las 9 celdas vecinas (3×3) en vez de barrer
+// toda la lista de alertas. Complejidad pasa de O(E·A) a O(E + A).
+//
+// cellSizeDeg se calcula como `radius / 111_000` más un margen del 10 %
+// para absorber la variación cos(φ) en longitud a estas latitudes (~4-5°)
+// sin tener que usar cos(φ) explícito. Si en el futuro se extiende a
+// zonas de alta latitud hay que escalar lng por cos(φ).
+function buildAlertGrid(
+  alerts: PublicAlert[],
+  cellSizeDeg: number,
+): Map<string, PublicAlert[]> {
+  const grid = new Map<string, PublicAlert[]>();
+  for (const a of alerts) {
+    const cx = Math.floor(a.lat / cellSizeDeg);
+    const cy = Math.floor(a.lng / cellSizeDeg);
+    const key = `${cx}:${cy}`;
+    let cell = grid.get(key);
+    if (!cell) {
+      cell = [];
+      grid.set(key, cell);
+    }
+    cell.push(a);
+  }
+  return grid;
+}
+
 export async function getAllBlockedEdgeIds(graph: Graph): Promise<Set<number>> {
   const alerts = await getAllPublicAlerts();
   const blocking = alerts.filter((a) => BLOCKING_TYPES.has(a.type));
   if (blocking.length === 0) return new Set();
 
-  const blocked = new Set<number>();
   const radius = CLUSTER_PARAMS.radiusMeters;
+  const cellSizeDeg = (radius * 1.1) / 111_000;
+  const grid = buildAlertGrid(blocking, cellSizeDeg);
+
+  const blocked = new Set<number>();
 
   for (let i = 0; i < graph.edges.length; i++) {
     const edge = graph.edges[i];
@@ -316,13 +460,21 @@ export async function getAllBlockedEdgeIds(graph: Graph): Promise<Set<number>> {
     const b = graph.nodes[toIdx];
     const midLat = (a.lat + b.lat) / 2;
     const midLng = (a.lng + b.lng) / 2;
+    const cx = Math.floor(midLat / cellSizeDeg);
+    const cy = Math.floor(midLng / cellSizeDeg);
 
-    for (const alert of blocking) {
-      if (Math.abs(alert.lat - midLat) > 0.001) continue;
-      if (Math.abs(alert.lng - midLng) > 0.001) continue;
-      if (haversineMeters(alert.lat, alert.lng, midLat, midLng) <= radius) {
-        blocked.add(i);
-        break;
+    let hit = false;
+    for (let dx = -1; dx <= 1 && !hit; dx++) {
+      for (let dy = -1; dy <= 1 && !hit; dy++) {
+        const cell = grid.get(`${cx + dx}:${cy + dy}`);
+        if (!cell) continue;
+        for (const alert of cell) {
+          if (haversineMeters(alert.lat, alert.lng, midLat, midLng) <= radius) {
+            blocked.add(i);
+            hit = true;
+            break;
+          }
+        }
       }
     }
   }

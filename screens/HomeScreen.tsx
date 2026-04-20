@@ -15,7 +15,7 @@
 
 import { MaterialIcons } from "@expo/vector-icons";
 import { type Href, useFocusEffect, useRouter } from "expo-router";
-import { useCallback, useState } from "react";
+import { useCallback } from "react";
 import {
   Alert,
   Linking,
@@ -26,14 +26,15 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { getActiveMissing } from "../src/services/missingPersonsService";
-import { getActiveBlockingAlerts } from "../src/services/reportsService";
+import { useCommunityStatus } from "../src/hooks/useCommunityStatus";
+
+type MaterialIconName = React.ComponentProps<typeof MaterialIcons>["name"];
 
 interface ModuleDef {
   id: string;
   title: string;
   subtitle: string;
-  icon: string;
+  icon: MaterialIconName;
   color: string;
   bgColor: string;
   screen: Href;
@@ -98,24 +99,16 @@ const MODULES: ModuleDef[] = [
 
 export default function HomeScreen() {
   const router = useRouter();
-  const [activeAlerts, setActiveAlerts] = useState(0);
-  const [activeMissing, setActiveMissing] = useState(0);
-
-  const refreshStatus = async () => {
-    try {
-      const alerts = await getActiveBlockingAlerts();
-      setActiveAlerts(alerts.length);
-      const missing = await getActiveMissing();
-      setActiveMissing(missing.length);
-    } catch (e) {
-      console.warn("[HomeScreen] refreshStatus:", e);
-    }
-  };
+  // Cache compartida entre pantallas. Refrescamos al enfocar solo si la
+  // cache es más vieja que 15 s — si ya se actualizó recientemente desde
+  // otra pantalla, no duplicamos queries.
+  const { alertCount: activeAlerts, missingCount: activeMissing, refresh } =
+    useCommunityStatus();
 
   useFocusEffect(
     useCallback(() => {
-      refreshStatus();
-    }, []),
+      refresh({ maxAgeMs: 15_000 });
+    }, [refresh]),
   );
 
   const handleCall123 = () => {
@@ -215,7 +208,7 @@ export default function HomeScreen() {
                   ]}
                 >
                   <MaterialIcons
-                    name={mod.icon as any}
+                    name={mod.icon}
                     size={28}
                     color={mod.color}
                   />
@@ -249,6 +242,9 @@ export default function HomeScreen() {
         style={styles.emergencyFab}
         onPress={handleCall123}
         activeOpacity={0.85}
+        accessibilityLabel="Llamar a la línea de emergencia 123"
+        accessibilityRole="button"
+        accessibilityHint="Abre el marcador telefónico con el número 123"
       >
         <MaterialIcons name="phone" size={22} color="#fff" />
         <Text style={styles.emergencyFabText}>123</Text>

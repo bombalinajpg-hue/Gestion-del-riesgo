@@ -42,6 +42,7 @@ import {
 } from '../algorithms/multiSourceDijkstra';
 import { getGraph } from './graphService';
 import { snapToNearestNode } from '../utils/snapToGraph';
+import { serializeByKey } from '../utils/asyncQueue';
 
 const CACHE_PREFIX = 'isochrone:';
 
@@ -87,48 +88,57 @@ export interface PrecomputeParams {
  * Precomputa la tabla de isócronas y la guarda en AsyncStorage.
  * Si ya hay una cache válida para esta combinación, la devuelve sin
  * recalcular (salvo `force: true`).
+ *
+ * La escritura al storage se serializa por clave (profile:emergencyType)
+ * y se envuelve en try/catch: si el storage falla (disco lleno, permisos,
+ * JSON demasiado grande), log + devolvemos la tabla igual — mejor iso
+ * calculada sin cachear que no iso del todo.
  */
 export async function precomputeIsochrones(
   params: PrecomputeParams
 ): Promise<IsochroneTable> {
-  if (!params.force) {
-    const cached = await loadCached(params.profile, params.emergencyType);
-    if (cached) return cached;
-  }
-
-  const graph = getGraph();
-  const sourceNodeIds: number[] = [];
-  const sourceNames: string[] = [];
-  for (const d of params.destinations) {
-    if (d.graphNodeId !== undefined) {
-      sourceNodeIds.push(d.graphNodeId);
-      sourceNames.push(d.nombre);
+  const key = cacheKey(params.profile, params.emergencyType);
+  return serializeByKey(key, async () => {
+    if (!params.force) {
+      const cached = await loadCached(params.profile, params.emergencyType);
+      if (cached) return cached;
     }
-  }
-  if (sourceNodeIds.length === 0) {
-    throw new Error('Ninguno de los destinos tiene graphNodeId asignado. Llama linkDestinations primero.');
-  }
 
-  const hazardPenalty =
-    params.emergencyType !== 'ninguna'
-      ? DEFAULT_HAZARD_PENALTIES[params.emergencyType]
-      : undefined;
+    const graph = getGraph();
+    const sourceNodeIds: number[] = [];
+    const sourceNames: string[] = [];
+    for (const d of params.destinations) {
+      if (d.graphNodeId !== undefined) {
+        sourceNodeIds.push(d.graphNodeId);
+        sourceNames.push(d.nombre);
+      }
+    }
+    if (sourceNodeIds.length === 0) {
+      throw new Error('Ninguno de los destinos tiene graphNodeId asignado. Llama linkDestinations primero.');
+    }
 
-  const table = multiSourceDijkstra(graph, {
-    profile: params.profile,
-    emergencyType: params.emergencyType,
-    sourceNodeIds,
-    sourceNames,
-    hazardPenalty,
-    blockedEdgeIds: params.blockedEdgeIds,
+    const hazardPenalty =
+      params.emergencyType !== 'ninguna'
+        ? DEFAULT_HAZARD_PENALTIES[params.emergencyType]
+        : undefined;
+
+    const table = multiSourceDijkstra(graph, {
+      profile: params.profile,
+      emergencyType: params.emergencyType,
+      sourceNodeIds,
+      sourceNames,
+      hazardPenalty,
+      blockedEdgeIds: params.blockedEdgeIds,
+    });
+
+    try {
+      await AsyncStorage.setItem(key, JSON.stringify(table));
+    } catch (e) {
+      console.warn('[isochroneService] No se pudo cachear la tabla:', e);
+    }
+
+    return table;
   });
-
-  await AsyncStorage.setItem(
-    cacheKey(params.profile, params.emergencyType),
-    JSON.stringify(table)
-  );
-
-  return table;
 }
 
 async function loadCached(

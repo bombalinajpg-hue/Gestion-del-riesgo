@@ -21,8 +21,7 @@
 import { MaterialIcons } from "@expo/vector-icons";
 import { DrawerActions, useNavigation } from "@react-navigation/native";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import * as Location from "expo-location";
-import type { Feature, FeatureCollection, Geometry } from "geojson";
+import type { FeatureCollection, Geometry } from "geojson";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -37,59 +36,44 @@ import {
   TouchableWithoutFeedback,
   View,
 } from "react-native";
-import MapView, { Geojson, MapType, Marker, Polyline } from "react-native-maps";
+import MapView, { MapType, Marker, Polyline } from "react-native-maps";
 import { useRouteContext } from "../context/RouteContext";
 import avenidaTorrencialData from "../data/amenaza_avenida_torrencial.json";
 import InundacionData from "../data/amenaza_inundacion.json";
 import movimientoMasaData from "../data/amenaza_movimiento_en_masa.json";
 import destinosRaw from "../data/destinos.json";
-import rawGraph from "../data/graph.json";
 import institucionesRaw from "../data/instituciones.json";
-import {
-  getGraph,
-  linkDestinations,
-  loadGraph,
-  type RawGraph,
-} from "../src/services/graphService";
-import {
-  precomputeIsochrones,
-  queryFromLocation,
-} from "../src/services/isochroneService";
-import { computeRoute } from "../src/services/localRouter";
+import { getGraph } from "../src/services/graphService";
+import { queryFromLocation } from "../src/services/isochroneService";
 import { getRefugeByName } from "../src/services/refugesService";
-import {
-  getActiveBlockingAlerts,
-  recomputePublicAlerts,
-} from "../src/services/reportsService";
-import type { IsochroneTable, PublicAlert } from "../src/types/graph";
+import { useCommunityStatus } from "../src/hooks/useCommunityStatus";
+import { useGraphBootstrap } from "../src/hooks/useGraphBootstrap";
+import { useIsochrones } from "../src/hooks/useIsochrones";
+import { useLocationTracking } from "../src/hooks/useLocationTracking";
+import { useQuickRoutePipeline } from "../src/hooks/useQuickRoutePipeline";
+import { useRoutePlanning } from "../src/hooks/useRoutePlanning";
+import type { IsochroneTable } from "../src/types/graph";
 import type {
   Destino,
-  DestinoFinal,
   HazardFeatureProperties,
   Institucion,
 } from "../src/types/types";
 import type { RefugeDetails } from "../src/types/v4";
-import {
-  findPolygonExitPoint,
-  isPointInAnyPolygonOrMulti,
-} from "../src/utils/geometry";
-import { DEV_MOCK_LOCATION, MOCK_LOCATION_COORDS } from "../src/utils/devMock";
-import { prewarmSnapIndex, snapToNearestNode } from "../src/utils/snapToGraph";
+import { DEV_MOCK_LOCATION } from "../src/utils/devMock";
 import { useRouteCalculationState } from "../src/utils/useRouteCalculationState";
 import IsochroneLegend from "./IsochroneLegend";
 import IsochroneOverlay from "./IsochroneOverlay";
+import MapHazardLayers from "./MapHazardLayers";
+import MapTopControls from "./MapTopControls";
 import RefugeDetailsModal from "./RefugeDetailsModal";
+import RouteStatusBanners from "./RouteStatusBanners";
 import StreetViewModal from "./StreetViewModal";
-import WeatherBadge from "./WeatherBadge";
 
 type HazardCollection = FeatureCollection<Geometry, HazardFeatureProperties>;
 
 const destinos = destinosRaw as Destino[];
 const instituciones = institucionesRaw as Institucion[];
 
-// Destino con id de nodo del grafo (asignado por snap). Es la forma que
-// precomputeIsochrones espera en su parámetro `destinations`.
-type LinkedDestino = Destino & { graphNodeId: number; graphNode: number };
 const avenidaTorrencial = avenidaTorrencialData as HazardCollection;
 const inundacion = InundacionData as HazardCollection;
 const movimientoMasa = movimientoMasaData as HazardCollection;
@@ -104,7 +88,20 @@ const filterByCategoria = (
   features: coll.features.filter((f) => f.properties?.Categoria === categoria),
 });
 
-const MAP_TYPES: { label: string; value: MapType; icon: string }[] = [
+// Los datos vienen de JSONs importados estáticamente — son inmutables.
+// Computamos las capas filtradas una sola vez a nivel de módulo en lugar
+// de re-filtrar ~3000 features en cada render.
+const mmBaja = filterByCategoria(movimientoMasa, "Baja");
+const mmMedia = filterByCategoria(movimientoMasa, "Media");
+const mmAlta = filterByCategoria(movimientoMasa, "Alta");
+const InundMedia = filterByCategoria(inundacion, "Media");
+const InundAlta = filterByCategoria(inundacion, "Alta");
+const avMedia = filterByCategoria(avenidaTorrencial, "Media");
+const avAlta = filterByCategoria(avenidaTorrencial, "Alta");
+
+type MaterialIconName = React.ComponentProps<typeof MaterialIcons>["name"];
+
+const MAP_TYPES: { label: string; value: MapType; icon: MaterialIconName }[] = [
   { label: "Estándar", value: "standard", icon: "map" },
   { label: "Satélite", value: "satellite", icon: "public" },
   { label: "Híbrido", value: "hybrid", icon: "layers" },
@@ -155,51 +152,6 @@ function findClosestViaGraph(
   return closestByHaversine({ latitude: userLat, longitude: userLng }, destinations);
 }
 
-function NorthArrow({ heading }: { heading: number }) {
-  return (
-    <View style={{ transform: [{ rotate: `-${heading}deg` }], alignItems: "center" }}>
-      <Text style={{ fontSize: 9, fontWeight: "900", color: "#ef476f", marginBottom: 1 }}>N</Text>
-      <View style={{ width: 0, height: 0, alignItems: "center" }}>
-        <View style={{ width: 0, height: 0, borderLeftWidth: 7, borderRightWidth: 0, borderBottomWidth: 13, borderLeftColor: "transparent", borderRightColor: "transparent", borderBottomColor: "#073b4c", position: "absolute", left: -7, top: 0 }} />
-        <View style={{ width: 0, height: 0, borderLeftWidth: 0, borderRightWidth: 7, borderBottomWidth: 13, borderLeftColor: "transparent", borderRightColor: "transparent", borderBottomColor: "#ef476f", position: "absolute", left: 0, top: 0 }} />
-        <View style={{ width: 0, height: 0, borderLeftWidth: 7, borderRightWidth: 0, borderTopWidth: 13, borderLeftColor: "transparent", borderRightColor: "transparent", borderTopColor: "#ffffff", position: "absolute", left: -7, top: 13 }} />
-        <View style={{ width: 0, height: 0, borderLeftWidth: 0, borderRightWidth: 7, borderTopWidth: 13, borderLeftColor: "transparent", borderRightColor: "transparent", borderTopColor: "#e0e0e0", position: "absolute", left: 0, top: 13 }} />
-      </View>
-      <View style={{ height: 26 }} />
-    </View>
-  );
-}
-
-function splitRouteByHazardExit(
-  polyline: { lat: number; lng: number }[],
-  hazardGeoJson: FeatureCollection | undefined,
-) {
-  const toLL = (p: { lat: number; lng: number }) => ({ latitude: p.lat, longitude: p.lng });
-  if (!hazardGeoJson || polyline.length === 0)
-    return { isInDangerZone: false, dangerCoords: [] as any[], routeCoords: polyline.map(toLL) };
-  const startInside = isPointInAnyPolygonOrMulti(toLL(polyline[0]), hazardGeoJson);
-  if (!startInside)
-    return { isInDangerZone: false, dangerCoords: [] as any[], routeCoords: polyline.map(toLL) };
-  const coordsLL = polyline.map(toLL);
-  const exitIndex = coordsLL.findIndex((c) => !isPointInAnyPolygonOrMulti(c, hazardGeoJson));
-  if (exitIndex === -1) return { isInDangerZone: true, dangerCoords: coordsLL, routeCoords: [] as any[] };
-  const exitPoint = exitIndex > 0
-    ? findPolygonExitPoint(coordsLL[exitIndex - 1], coordsLL[exitIndex], hazardGeoJson)
-    : coordsLL[exitIndex];
-  return {
-    isInDangerZone: true,
-    dangerCoords: [...coordsLL.slice(0, exitIndex), exitPoint],
-    routeCoords: [exitPoint, ...coordsLL.slice(exitIndex)],
-  };
-}
-
-function formatRouteSummary(dm: number, ds: number) {
-  const distancia = dm >= 1000 ? `${(dm / 1000).toFixed(1)} km` : `${Math.round(dm)} m`;
-  const mins = Math.round(ds / 60);
-  const tiempo = mins < 60 ? `${mins} min` : `${Math.floor(mins / 60)}h ${mins % 60}min`;
-  return { distancia, tiempo };
-}
-
 function openInGoogleMaps(sLat: number, sLng: number, eLat: number, eLng: number, profile: string) {
   const travelmode = profile === "driving-car" ? "driving"
     : profile === "cycling-regular" ? "bicycling" : "walking";
@@ -211,34 +163,26 @@ export default function MapViewContainer() {
   const mapRef = useRef<MapView>(null);
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
-  const [location, setLocation] = useState<Location.LocationObjectCoords | null>(null);
-  const [locationError, setLocationError] = useState<LocationError | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [routeCoords, setRouteCoords] = useState<{ latitude: number; longitude: number }[]>([]);
-  const [dangerSegment, setDangerSegment] = useState<{ latitude: number; longitude: number }[]>([]);
-  const [evacuando, setEvacuando] = useState(false);
-  const [rutaSugerida, setRutaSugerida] = useState(false);
-  // TDD puede no encontrar camino que llegue antes del frente; en ese caso
-  // el motor devuelve "la menos mala" con A*. Guardamos el flag para que
-  // la UI advierta al usuario que el camino no está garantizado seguro.
-  const [rutaRiesgosa, setRutaRiesgosa] = useState(false);
-  const [destinoFinal, setDestinoFinal] = useState<DestinoFinal | null>(null);
-  const [alertaDangerMostrada, setAlertaDangerMostrada] = useState(false);
+  // GPS + heading encapsulados en hook; ver src/hooks/useLocationTracking.ts.
+  const { location, heading, loading, locationError } = useLocationTracking();
+  // Estado de ruta (routeCoords, destinoFinal, evacuando, rutaSugerida,
+  // rutaRiesgosa, resumen, alertaDangerMostrada) + calcularRuta viven
+  // en useRoutePlanning. Se instancia más abajo, tras tener location,
+  // graphReady, emergencyType, isoTable, etc.
   const [puntoConfirmado, setPuntoConfirmado] = useState(false);
   const [mapType, setMapType] = useState<MapType>("hybrid");
   const [showMapTypePicker, setShowMapTypePicker] = useState(false);
-  const [heading, setHeading] = useState(0);
   const [resaltarIniciar, setResaltarIniciar] = useState(false);
-  const [resumenRuta, setResumenRuta] = useState<{ distancia: string; tiempo: string } | null>(null);
 
-  const [graphReady, setGraphReady] = useState(false);
   const [streetViewVisible, setStreetViewVisible] = useState(false);
   const [refugeDetailsVisible, setRefugeDetailsVisible] = useState(false);
   const [refugeDetailsData, setRefugeDetailsData] = useState<RefugeDetails | null>(null);
-  const [blockingAlerts, setBlockingAlerts] = useState<PublicAlert[]>([]);
-  const [isoTable, setIsoTable] = useState<IsochroneTable | null>(null);
-  const [isoError, setIsoError] = useState<string | null>(null);
-  const [isoComputing, setIsoComputing] = useState(false);
+  // Alertas ciudadanas vienen de la cache compartida. El poll de 60 s
+  // abajo dispara recompute para mantener el clustering fresco; el resto
+  // de pantallas ve los mismos datos sin duplicar queries.
+  const { alerts: blockingAlerts, refresh: refreshCommunity } = useCommunityStatus();
+  // isoTable + computeIso encapsulados (ver useIsochrones). Se configura
+  // tras `routeProfile` y `emergencyType` más abajo vía useRouteContext.
   const [showIsochroneOverlay, setShowIsochroneOverlay] = useState(false);
   const [showLugares, setShowLugares] = useState(false);
 
@@ -247,7 +191,7 @@ export default function MapViewContainer() {
   const {
     selectedDestination, setSelectedDestination,
     selectedInstitucion, setSelectedInstitucion,
-    routeProfile, setRouteProfile,
+    routeProfile,
     startMode, setStartMode,
     startPoint, setStartPoint,
     destinationMode, setDestinationMode,
@@ -259,72 +203,58 @@ export default function MapViewContainer() {
     quickRouteMode, setQuickRouteMode,
   } = useRouteContext();
 
-  const abortRef = useRef<AbortController | null>(null);
-  const linkedDestinosRef = useRef<LinkedDestino[]>([]);
-  // Si la última ruta auto-sugerida (modo "closest") se resolvió sin la
-  // tabla de isócronas (fallback haversine), queremos recomputar apenas
-  // la tabla esté disponible — si no, el usuario se queda con un destino
-  // sub-óptimo que ignoró las penalizaciones de amenaza.
-  const lastClosestUsedIsoRef = useRef<boolean>(false);
-
-  const mmBaja = filterByCategoria(movimientoMasa, "Baja");
-  const mmMedia = filterByCategoria(movimientoMasa, "Media");
-  const mmAlta = filterByCategoria(movimientoMasa, "Alta");
-  const InundMedia = filterByCategoria(inundacion, "Media");
-  const InundAlta = filterByCategoria(inundacion, "Alta");
-  const avMedia = filterByCategoria(avenidaTorrencial, "Media");
-  const avAlta = filterByCategoria(avenidaTorrencial, "Alta");
-
   const navigation = useNavigation();
   const router = useRouter();
-  const params = useLocalSearchParams<{ autoOpen?: string; autoRoute?: string }>();
+  // `useLocalSearchParams` puede devolver `string | string[]` si una clave
+  // aparece duplicada en la URL. Normalizamos al primer valor y validamos
+  // contra los literales esperados; cualquier valor desconocido queda como
+  // `undefined` para que los efectos downstream no dispararen por error.
+  const rawParams = useLocalSearchParams<{ autoOpen?: string | string[]; autoRoute?: string | string[] }>();
+  const autoOpen = (() => {
+    const v = Array.isArray(rawParams.autoOpen) ? rawParams.autoOpen[0] : rawParams.autoOpen;
+    return v === "drawer" || v === "pickStart" ? v : undefined;
+  })();
+  const autoRoute = (() => {
+    const v = Array.isArray(rawParams.autoRoute) ? rawParams.autoRoute[0] : rawParams.autoRoute;
+    return v === "1" ? v : undefined;
+  })();
   const autoOpenRef = useRef(false);
-  // Flags del pipeline quickRoute para evitar ejecutar los prompts más
-  // de una vez (cada uno ya cambió estado, no queremos re-disparar).
-  const quickAutoRouteRef = useRef(false);
-  const quickDestMethodAskedRef = useRef(false);
-  const quickActionAskedRef = useRef(false);
 
   const puntosEncuentro = useMemo(
     () => destinos.filter((d) => d.tipo === "punto_encuentro"),
     [],
   );
 
-  // ── Grafo: carga + SNAP MANUAL con doble seguro de nombres ──────────────
-  useEffect(() => {
-    try {
-      loadGraph(rawGraph as unknown as RawGraph);
-      const g = getGraph();
-      prewarmSnapIndex(g);
-      // Llamamos linkDestinations por si tiene efectos secundarios en el
-      // grafo (puede crear aristas hacia los destinos), pero NO confiamos
-      // que asigne graphNodeId correctamente.
-      try { linkDestinations(puntosEncuentro); } catch (e) {
-        console.warn("[MapView] linkDestinations:", e);
-      }
-      // ★ FIX CRÍTICO: snap manual. `snapToNearestNode` devuelve el ÍNDICE
-      // del nodo en el array; `precomputeIsochrones` y los algoritmos
-      // esperan el ID real (graph.nodes[i].id). Traducir aquí es lo que
-      // evita que las isócronas arranquen desde nodos equivocados.
-      const linked: LinkedDestino[] = puntosEncuentro.flatMap((d) => {
-        const idx = snapToNearestNode(d.lat, d.lng, g);
-        if (idx === null) return [];
-        const nodeId = g.nodes[idx].id;
-        return [{ ...d, graphNodeId: nodeId, graphNode: nodeId }];
-      });
-      linkedDestinosRef.current = linked;
-      if (linked.length === 0) {
-        console.error("[MapView] Ningún destino pudo ser snapeado al grafo");
-      } else {
-        console.log(`[MapView] ${linked.length}/${puntosEncuentro.length} destinos snapeados al grafo`);
-      }
-      setGraphReady(true);
-    } catch (e) {
-      console.error("[MapView] Fallo al cargar grafo:", e);
-      Alert.alert("Grafo no disponible", "Ejecuta `node scripts/build-graph.js`.");
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // Grafo + snap encapsulados en hook. Devuelve cuando todo está listo
+  // y los destinos ya están asociados a sus nodos del grafo.
+  const { graphReady, linkedDestinos } = useGraphBootstrap(puntosEncuentro);
+
+  // Tabla de isócronas: cálculo, cache y auto-refresh con debounce.
+  const { isoTable, isoError, isoComputing, computeIso } = useIsochrones({
+    graphReady,
+    linkedDestinos,
+    emergencyType,
+    routeProfile,
+  });
+
+  // Estado de ruta + calcularRuta encapsulados (ver useRoutePlanning).
+  const {
+    routeCoords, dangerSegment,
+    destinoFinal,
+    rutaSugerida, evacuando,
+    rutaRiesgosa, resumenRuta,
+    calcularRuta, resetRouteState,
+  } = useRoutePlanning({
+    location, graphReady, puntosEncuentro,
+    emergencyType, routeProfile, startMode, startPoint, destinationMode,
+    selectedDestination, selectedInstitucion,
+    isoTable, computeIso,
+    hazardByEmergency: {
+      inundacion,
+      movimiento_en_masa: movimientoMasa,
+      avenida_torrencial: avenidaTorrencial,
+    },
+  });
 
   // Flujo rápido desde Emergency / Home: si llegamos con `?autoOpen=drawer`,
   // abrimos el drawer automáticamente cuando el grafo está listo para que
@@ -332,7 +262,7 @@ export default function MapViewContainer() {
   useEffect(() => {
     if (autoOpenRef.current) return;
     if (!graphReady) return;
-    if (params.autoOpen === "drawer") {
+    if (autoOpen === "drawer") {
       autoOpenRef.current = true;
       // Pequeño delay para que la animación de entrada de la pantalla termine.
       const t = setTimeout(() => {
@@ -340,58 +270,9 @@ export default function MapViewContainer() {
       }, 250);
       return () => clearTimeout(t);
     }
-  }, [graphReady, params.autoOpen, navigation]);
+  }, [graphReady, autoOpen, navigation]);
 
-  // ── Ubicación ───────────────────────────────────────────────────────────
-  useEffect(() => {
-    // Dev mock: usa una ubicación fija en Santa Rosa y salta todo el GPS
-    // real. Ver src/utils/devMock.ts y EXPO_PUBLIC_DEV_MOCK_LOCATION.
-    if (DEV_MOCK_LOCATION) {
-      setLocation(MOCK_LOCATION_COORDS);
-      setLoading(false);
-      setHeading(0);
-      return;
-    }
-    let locSub: Location.LocationSubscription | undefined;
-    let headSub: Location.LocationSubscription | undefined;
-    let cancelled = false;
-    (async () => {
-      try {
-        const enabled = await Location.hasServicesEnabledAsync();
-        if (cancelled) return;
-        if (!enabled) { setLocationError("disabled"); setLoading(false); return; }
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (cancelled) return;
-        if (status !== "granted") { setLocationError("denied"); setLoading(false); return; }
-        try {
-          const fix = await Location.getLastKnownPositionAsync();
-          if (cancelled) return;
-          if (fix) { setLocation(fix.coords); setLoading(false); }
-        } catch (e) {
-          console.warn("[MapView] getLastKnownPositionAsync:", e);
-        }
-        // Importante: si el cleanup corre durante el await, devolvemos la sub
-        // recién creada para que no quede viva (drenando batería + setState
-        // sobre componente desmontado).
-        locSub = await Location.watchPositionAsync(
-          { accuracy: Location.Accuracy.High, distanceInterval: 3 },
-          (loc) => { if (!cancelled) { setLocation(loc.coords); setLoading(false); } },
-        );
-        if (cancelled) { locSub.remove(); locSub = undefined; return; }
-        headSub = await Location.watchHeadingAsync((h) => {
-          if (!cancelled) {
-            const raw = h.trueHeading ?? h.magHeading ?? 0;
-            setHeading(raw >= 0 ? raw : 0);
-          }
-        });
-        if (cancelled) { headSub.remove(); headSub = undefined; return; }
-      } catch (e) {
-        console.warn("[MapView] Location setup:", e);
-        if (!cancelled) { setLocationError("error"); setLoading(false); }
-      }
-    })();
-    return () => { cancelled = true; locSub?.remove(); headSub?.remove(); };
-  }, []);
+  // Suscripción de GPS + heading encapsulada en useLocationTracking.
 
   useEffect(() => {
     if (!shouldCenterOnUser || !location) return;
@@ -401,60 +282,55 @@ export default function MapViewContainer() {
     setShouldCenterOnUser(false);
   }, [shouldCenterOnUser, location]);
 
+  // Cambio de startMode: reset de puntoConfirmado y del startPoint si
+  // vuelve a "gps". El limpiado de coords/rutaSugerida lo hace el hook.
   useEffect(() => {
     setPuntoConfirmado(false);
     if (startMode === "gps") setStartPoint(null);
-    setRouteCoords([]); setDangerSegment([]); setRutaSugerida(false); setResumenRuta(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [startMode]);
 
   useEffect(() => {
     if (startMode === "manual" && startPoint) {
       setPuntoConfirmado(false);
-      setRouteCoords([]); setDangerSegment([]); setRutaSugerida(false); setResumenRuta(null);
     }
-  }, [startPoint]);
+  }, [startPoint, startMode]);
 
-  // ★ FIX ISSUE 4: setear destinoFinal apenas el usuario elige
-  // (antes solo se seteaba tras calcular la ruta)
-  useEffect(() => {
-    const picked = selectedInstitucion ?? selectedDestination;
-    if (picked) {
-      setDestinoFinal({ nombre: picked.nombre, lat: picked.lat, lng: picked.lng });
-    }
-  }, [selectedDestination, selectedInstitucion]);
+  // La sincronización destinoFinal ← selectedDestination/selectedInstitucion
+  // vive ahora dentro de useRoutePlanning.
 
   useEffect(() => {
-    if (selectedDestination || selectedInstitucion) {
-      setResaltarIniciar(true);
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(pulseAnim, { toValue: 1.06, duration: 400, useNativeDriver: true }),
-          Animated.timing(pulseAnim, { toValue: 1, duration: 400, useNativeDriver: true }),
-        ]), { iterations: 4 },
-      ).start(() => setResaltarIniciar(false));
-    }
-  }, [selectedDestination, selectedInstitucion]);
-
-  // En modo ruteo solo necesitamos las alertas ciudadanas bloqueantes
-  // (ya afectan al algoritmo via reportsService). Desaparecidos, familia
-  // y POIs se muestran en Community / Visor.
-  const refreshAux = async () => {
-    try {
-      await recomputePublicAlerts();
-      setBlockingAlerts(await getActiveBlockingAlerts());
-    } catch (e) { console.warn("[MapView] refreshAux:", e); }
-  };
+    if (!selectedDestination && !selectedInstitucion) return;
+    setResaltarIniciar(true);
+    const anim = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, { toValue: 1.06, duration: 400, useNativeDriver: true }),
+        Animated.timing(pulseAnim, { toValue: 1, duration: 400, useNativeDriver: true }),
+      ]),
+      { iterations: 4 },
+    );
+    anim.start(() => setResaltarIniciar(false));
+    return () => {
+      // Si el componente se desmonta o cambia la selección a mitad del
+      // pulso, detenemos la animación y el callback de final — sin esto
+      // Animated mantendría el driver corriendo sobre un valor huérfano.
+      anim.stop();
+      pulseAnim.setValue(1);
+    };
+  }, [selectedDestination, selectedInstitucion, pulseAnim]);
 
   // Poll de alertas/desaparecidos/familia cada 60 s, SOLO con la app en
-  // primer plano. Sin este gate el interval sigue corriendo en background
-  // y consume batería + datos mientras nadie lo está viendo.
+  // primer plano. Dispara recompute para reclusterizar los reports; los
+  // demás consumidores de useCommunityStatus reciben los datos nuevos
+  // automáticamente via la cache compartida.
   useEffect(() => {
     if (!graphReady) return;
+    const tick = () => refreshCommunity({ recompute: true });
     let interval: ReturnType<typeof setInterval> | null = null;
     const start = () => {
       if (interval !== null) return;
-      refreshAux();
-      interval = setInterval(refreshAux, 60_000);
+      tick();
+      interval = setInterval(tick, 60_000);
     };
     const stop = () => {
       if (interval !== null) { clearInterval(interval); interval = null; }
@@ -464,139 +340,16 @@ export default function MapViewContainer() {
       if (state === "active") start(); else stop();
     });
     return () => { stop(); sub.remove(); };
-  }, [graphReady]);
+  }, [graphReady, refreshCommunity]);
 
-  const computeIso = async (): Promise<IsochroneTable | null> => {
-    if (!graphReady || linkedDestinosRef.current.length === 0) {
-      setIsoError("No hay destinos válidos en el grafo");
-      return null;
-    }
-    if (emergencyType === "ninguna") {
-      setIsoError(null);
-      setIsoTable(null);
-      return null;
-    }
-    setIsoError(null);
-    setIsoComputing(true);
-    try {
-      const table = await precomputeIsochrones({
-        profile: routeProfile ?? "foot-walking",
-        emergencyType,
-        destinations: linkedDestinosRef.current,
-      });
-      setIsoTable(table);
-      return table;
-    } catch (e: any) {
-      const msg = String(e?.message ?? e);
-      console.error("[MapView] Isócronas fallaron:", e);
-      setIsoError(msg);
-      setIsoTable(null);
-      return null;
-    } finally {
-      setIsoComputing(false);
-    }
-  };
+  // calcularRuta vive ahora en useRoutePlanning (arriba).
 
-  useEffect(() => {
-    if (!graphReady) return;
-    if (emergencyType === "ninguna") { setIsoTable(null); setIsoError(null); return; }
-    const t = setTimeout(() => { computeIso(); }, 200);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [graphReady, emergencyType, routeProfile]);
+  // El cálculo solo lo dispara el botón "CALCULAR RUTA DE EVACUACIÓN"
+  // explícitamente; antes había un auto-route al cambiar de emergencia
+  // que resultaba confuso (veías una ruta sin haberla pedido).
 
-  // ── Cálculo de ruta ─────────────────────────────────────────────────────
-  const calcularRuta = async (markAsEvacuando: boolean) => {
-    if (!location || !graphReady) return;
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    let finalDestination: DestinoFinal | null = selectedInstitucion ?? selectedDestination;
-    let closestUsedIso = false;
-
-    if (!finalDestination && destinationMode === "closest") {
-      const userLat = startMode === "manual" && startPoint ? startPoint.lat : location.latitude;
-      const userLng = startMode === "manual" && startPoint ? startPoint.lng : location.longitude;
-      let iso = isoTable;
-      if (!iso && emergencyType !== "ninguna") {
-        iso = await computeIso();
-      }
-      closestUsedIso = iso !== null;
-      finalDestination = findClosestViaGraph(userLat, userLng, puntosEncuentro, iso);
-    }
-    if (!finalDestination) return;
-    setDestinoFinal(finalDestination);
-    lastClosestUsedIsoRef.current = closestUsedIso;
-
-    const hazardSource: HazardCollection | undefined =
-      emergencyType === "inundacion" ? inundacion
-        : emergencyType === "movimiento_en_masa" ? movimientoMasa
-        : emergencyType === "avenida_torrencial" ? avenidaTorrencial : undefined;
-    const hazardGeoJson: FeatureCollection | undefined = hazardSource && {
-      type: "FeatureCollection",
-      features: hazardSource.features.filter(
-        (f): f is Feature<Geometry, HazardFeatureProperties> =>
-          f.properties?.Categoria === "Media" || f.properties?.Categoria === "Alta",
-      ),
-    };
-
-    const startLat = startMode === "manual" && startPoint ? startPoint.lat : location.latitude;
-    const startLng = startMode === "manual" && startPoint ? startPoint.lng : location.longitude;
-    const profile = routeProfile ?? "foot-walking";
-    const alternativeEnds = (!selectedInstitucion && !selectedDestination && destinationMode === "closest")
-      ? puntosEncuentro.map((d) => ({ lat: d.lat, lng: d.lng, name: d.nombre })) : undefined;
-
-    try {
-      const result = await computeRoute({
-        start: { lat: startLat, lng: startLng },
-        end: { lat: finalDestination.lat, lng: finalDestination.lng },
-        profile, emergencyType, algorithm: "time-dependent", alternativeEnds,
-      });
-      if (controller.signal.aborted) return;
-      if (!result) {
-        if (markAsEvacuando) Alert.alert("Ruta no disponible", "No se encontró un camino.");
-        setRutaSugerida(false);
-        return;
-      }
-      const { isInDangerZone, dangerCoords, routeCoords } = splitRouteByHazardExit(result.polyline, hazardGeoJson);
-      if (markAsEvacuando && isInDangerZone && dangerCoords.length > 0 && !alertaDangerMostrada) {
-        setAlertaDangerMostrada(true);
-        Alert.alert("⚠️ Estás en zona de riesgo", "Sigue la ruta para salir del área peligrosa.", [{ text: "Entendido" }]);
-      }
-      if (alternativeEnds && result.destinationName && result.destinationName !== finalDestination.nombre) {
-        const chosen = puntosEncuentro.find((d) => d.nombre === result.destinationName);
-        if (chosen) setDestinoFinal({ nombre: chosen.nombre, lat: chosen.lat, lng: chosen.lng });
-      }
-      setResumenRuta(formatRouteSummary(result.distanceMeters, result.durationSeconds));
-      setDangerSegment(dangerCoords);
-      setRouteCoords(routeCoords);
-      setRutaRiesgosa(result.isRiskyFallback);
-      // Si es ruta riesgosa y el usuario la confirma como evacuación, le
-      // avisamos una vez: no hay camino que el modelo garantice salir a
-      // tiempo, pero esta es la "menos mala" que encontró.
-      if (markAsEvacuando && result.isRiskyFallback) {
-        Alert.alert(
-          "⚠️ Sin ruta garantizada",
-          "El modelo no encontró un camino que llegue antes del frente de la amenaza. Esta es la ruta menos expuesta que existe. Actúa con extrema precaución.",
-          [{ text: "Entendido" }],
-        );
-      }
-      if (markAsEvacuando) { setEvacuando(true); setRutaSugerida(false); }
-      else { setRutaSugerida(true); }
-    } catch (err) {
-      if (controller.signal.aborted) return;
-      console.error("[MapView] Ruta:", err);
-      if (markAsEvacuando) Alert.alert("Error", "No se pudo calcular la ruta.");
-    }
-  };
-
-  // Nota: el auto-route fue removido — calcular al elegir emergencia
-  // resultaba confuso (veías una ruta sin haberla pedido). El cálculo
-  // ahora solo lo dispara el botón "IR AQUÍ" explícitamente.
-
-  // Botón principal "IR AQUÍ" — calcula ruta + inicia evacuación. Acepta
-  // dos casos:
+  // Botón principal "CALCULAR RUTA DE EVACUACIÓN" — calcula ruta + inicia
+  // evacuación. Acepta dos casos:
   //   - destinoFinal definido (el usuario eligió refugio/institución específicos)
   //   - modo "closest" (calcularRuta hace findClosestViaGraph internamente)
   const handleIrAqui = async () => {
@@ -633,14 +386,7 @@ export default function MapViewContainer() {
 
   const handleResetAll = () => {
     cancelAll();
-    abortRef.current?.abort();
-    setEvacuando(false);
-    setRutaSugerida(false);
-    setRutaRiesgosa(false);
-    setRouteCoords([]);
-    setDangerSegment([]);
-    setDestinoFinal(null);
-    setAlertaDangerMostrada(false);
+    resetRouteState();
     setPuntoConfirmado(false);
     setStartPoint(null);
     setStartMode("gps");
@@ -649,7 +395,6 @@ export default function MapViewContainer() {
     setSelectedInstitucion(null);
     setDestinationMode("closest");
     setResaltarIniciar(false);
-    setResumenRuta(null);
     setShowIsochroneOverlay(false);
     setPickingFromIsochroneMap(false);
     setShowingInstitucionesOverlay(false);
@@ -682,125 +427,20 @@ export default function MapViewContainer() {
   // al usuario (efecto más abajo) y la ruta que se dibuja es la del motor
   // local (TDD + fallback), no la de Google.
 
-  // ── Pipeline QUICK ROUTE (desde EmergencyScreen) ──────────────────────
-  //
-  // Caso A — "Desde mi ubicación": llegamos con ?autoRoute=1, startMode=gps,
-  // destinationMode=closest. Apenas location y graphReady listos, disparamos
-  // calcularRuta(true) — el usuario ya confirmó el flujo rápido, así que
-  // pasamos directo a evacuando.
-  useEffect(() => {
-    if (quickAutoRouteRef.current) return;
-    if (!quickRouteMode) return;
-    if (params.autoRoute !== "1") return;
-    if (!graphReady || !location) return;
-    if (startMode !== "gps") return;
-    if (emergencyType === "ninguna") return;
-    if (evacuando) return;
-    quickAutoRouteRef.current = true;
-    const t = setTimeout(() => {
-      setCalculating(() => calcularRuta(true));
-      setQuickRouteMode(false);
-    }, 350);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [quickRouteMode, params.autoRoute, graphReady, location, startMode, emergencyType, evacuando]);
-
-  // Caso B — "Elegir en el mapa": tras tocar el mapa (startPoint set), en
-  // quickRouteMode auto-confirmamos y mostramos un Alert con los 3 métodos
-  // de destino. El usuario no tiene que pulsar "CONFIRMAR PUNTO".
-  useEffect(() => {
-    if (quickDestMethodAskedRef.current) return;
-    if (!quickRouteMode) return;
-    if (startMode !== "manual") return;
-    if (!startPoint) return;
-    if (emergencyType === "ninguna") return;
-    quickDestMethodAskedRef.current = true;
-    setPuntoConfirmado(true);
-    const t = setTimeout(() => {
-      Alert.alert(
-        "¿Cómo eliges el destino?",
-        "Selecciona el método para llegar al lugar seguro.",
-        [
-          {
-            text: "🏁 Punto más cercano",
-            onPress: () => {
-              setDestinationMode("closest");
-              setCalculating(() => calcularRuta(true));
-              setQuickRouteMode(false);
-            },
-          },
-          {
-            text: "🔥 Mapa de calor",
-            onPress: () => {
-              setDestinationMode("manual");
-              setPickingFromIsochroneMap(true);
-              setShowIsochroneOverlay(true);
-            },
-          },
-          {
-            text: "🏥 Instituciones",
-            onPress: () => {
-              setDestinationMode("manual");
-              setShowingInstitucionesOverlay(true);
-            },
-          },
-          {
-            text: "Cancelar",
-            style: "cancel",
-            onPress: () => setQuickRouteMode(false),
-          },
-        ],
-      );
-    }, 280);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [quickRouteMode, startMode, startPoint, emergencyType]);
-
-  // Caso C — tras elegir destino (heatmap o institución) en quickRouteMode
-  // mostramos un Alert con 3 acciones: Iniciar navegación / Google Maps /
-  // Vista 360°. El destinoFinal ya se actualizó por el useEffect de
-  // [selectedDestination, selectedInstitucion].
-  useEffect(() => {
-    if (quickActionAskedRef.current) return;
-    if (!quickRouteMode) return;
-    if (!destinoFinal) return;
-    if (evacuando) return;
-    if (!pickingFromIsochroneMap && !showingInstitucionesOverlay &&
-        !selectedDestination && !selectedInstitucion) return;
-    quickActionAskedRef.current = true;
-    const t = setTimeout(() => {
-      Alert.alert(
-        `→ ${destinoFinal.nombre}`,
-        "¿Qué quieres hacer?",
-        [
-          {
-            text: "🏃 Iniciar ruta de evacuación",
-            onPress: () => {
-              setCalculating(() => calcularRuta(true));
-              setQuickRouteMode(false);
-            },
-          },
-          {
-            text: "🗺️ Calcular con Google Maps",
-            onPress: () => {
-              handleOpenGoogleMaps();
-              setQuickRouteMode(false);
-            },
-          },
-          {
-            text: "📷 Vista 360°",
-            onPress: () => {
-              setStreetViewVisible(true);
-              setQuickRouteMode(false);
-            },
-          },
-          { text: "Cancelar", style: "cancel" },
-        ],
-      );
-    }, 200);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [quickRouteMode, destinoFinal, evacuando, selectedDestination, selectedInstitucion]);
+  // Pipeline QUICK ROUTE (desde EmergencyScreen): ver src/hooks/useQuickRoutePipeline.
+  useQuickRoutePipeline({
+    quickRouteMode, setQuickRouteMode,
+    autoRouteParam: autoRoute,
+    graphReady, location,
+    startMode, startPoint, emergencyType, evacuando,
+    destinoFinal, selectedDestination, selectedInstitucion,
+    pickingFromIsochroneMap, showingInstitucionesOverlay,
+    setDestinationMode, setPickingFromIsochroneMap,
+    setShowingInstitucionesOverlay, setShowIsochroneOverlay,
+    setPuntoConfirmado, setStreetViewVisible,
+    calcularRuta, setCalculating,
+    openGoogleMaps: handleOpenGoogleMaps,
+  });
 
   const handleOpenRefugeDetails = (nombre: string) => {
     const details = getRefugeByName(nombre);
@@ -880,6 +520,14 @@ export default function MapViewContainer() {
     return { latitude, longitude, latitudeDelta, longitudeDelta };
   }, [graphReady]);
 
+  // Memoizado para no llamar `getGraph()` en cada render dentro del JSX.
+  // El grafo es singleton y no cambia tras `graphReady`, así que la
+  // identidad es estable — IsochroneOverlay puede memoizarse sobre `graph`.
+  const graphForOverlay = useMemo(
+    () => (graphReady ? getGraph() : null),
+    [graphReady],
+  );
+
   // Preview del destino más cercano cuando el usuario eligió modo "closest"
   // y hay emergencia seleccionada: así ve cuál refugio se tomaría ANTES
   // de disparar el cálculo completo. IMPORTANTE: este useMemo debe estar
@@ -936,7 +584,6 @@ export default function MapViewContainer() {
     emergencyType !== "ninguna" && routeProfile !== null &&
     ((startMode === "gps" && location !== null) ||
       (startMode === "manual" && startPoint !== null));
-  const hayRutaCalculada = routeCoords.length > 0 || dangerSegment.length > 0;
   const iconoModo = routeProfile === "driving-car" ? "🚗" : routeProfile === "cycling-regular" ? "🚴" : "🚶";
   const mostrarIsocronas = (showIsochroneOverlay || pickingFromIsochroneMap) && isoTable !== null && !evacuando && emergencyType !== "ninguna";
   const mostrarBotonReset = emergencyType !== "ninguna" || selectedDestination !== null ||
@@ -994,6 +641,8 @@ export default function MapViewContainer() {
       <TouchableOpacity
         onPress={() => navigation.dispatch(DrawerActions.openDrawer())}
         style={styles.menuButton}
+        accessibilityLabel="Abrir menú de emergencia"
+        accessibilityRole="button"
       >
         <Text style={{ fontSize: 24 }}>☰</Text>
       </TouchableOpacity>
@@ -1003,41 +652,15 @@ export default function MapViewContainer() {
           rediseño v4.3. Este mapa se dedica exclusivamente a calcular
           la ruta de evacuación. */}
 
-      <View style={styles.topRightGroup} pointerEvents="box-none">
-        <TouchableOpacity style={styles.squareButton} onPress={() => setShowMapTypePicker(true)}>
-          <MaterialIcons name="layers" size={24} color="#073b4c" />
-        </TouchableOpacity>
-        <WeatherBadge />
-        <TouchableOpacity
-          style={[
-            styles.squareButton,
-            showIsochroneOverlay && { backgroundColor: "#10b981" },
-            isoComputing && { backgroundColor: "#fef3c7" },
-          ]}
-          onPress={handleIsochroneButton}
-        >
-          {isoComputing ? (
-            <ActivityIndicator size="small" color="#d97706" />
-          ) : (
-            <MaterialIcons name="timer" size={24} color={showIsochroneOverlay ? "#ffffff" : "#073b4c"} />
-          )}
-        </TouchableOpacity>
-        {/* Toggle "Ver lugares": muestra/oculta todos los refugios +
-            instituciones sobre el mapa, independiente del wizard. */}
-        <TouchableOpacity
-          style={[
-            styles.squareButton,
-            showLugares && { backgroundColor: "#f59e0b" },
-          ]}
-          onPress={() => setShowLugares((v) => !v)}
-          accessibilityLabel="Ver refugios e instituciones"
-        >
-          <MaterialIcons name="place" size={24} color={showLugares ? "#ffffff" : "#073b4c"} />
-        </TouchableOpacity>
-        <View style={styles.roundButton}>
-          <NorthArrow heading={heading} />
-        </View>
-      </View>
+      <MapTopControls
+        heading={heading}
+        showIsochroneOverlay={showIsochroneOverlay}
+        isoComputing={isoComputing}
+        showLugares={showLugares}
+        onOpenMapTypePicker={() => setShowMapTypePicker(true)}
+        onToggleIsochrones={handleIsochroneButton}
+        onToggleLugares={() => setShowLugares((v) => !v)}
+      />
 
       {mostrarIsocronas && (
         <View style={styles.legendPosition} pointerEvents="none">
@@ -1045,50 +668,17 @@ export default function MapViewContainer() {
         </View>
       )}
 
-      {/* Stack de banners superiores. Todos comparten esta columna y se
-          apilan con gap en vez de competir por el mismo `top`. */}
-      <View style={styles.topBannersStack} pointerEvents="box-none">
-        {pickingFromIsochroneMap && (
-          <View style={styles.pickingBanner}>
-            <MaterialIcons name="touch-app" size={18} color="#fff" />
-            <Text style={styles.pickingBannerText}>
-              Toca un refugio en el mapa para elegirlo
-            </Text>
-          </View>
-        )}
-        {evacuando && routeCoords.length > 0 && (
-          <View style={styles.evacuandoBanner}>
-            <Text style={styles.evacuandoText}>🚨 Evacuando</Text>
-          </View>
-        )}
-        {rutaRiesgosa && (evacuando || rutaSugerida) && (
-          <View style={styles.riskyBanner}>
-            <MaterialIcons name="warning" size={18} color="#fff" />
-            <Text style={styles.riskyBannerText}>
-              Ruta no garantizada · el frente podría cortarla
-            </Text>
-          </View>
-        )}
-        {rutaSugerida && !evacuando && (
-          <View style={[styles.evacuandoBanner, { backgroundColor: "#118ab2" }]}>
-            <Text style={styles.evacuandoText}>🧭 Ruta sugerida</Text>
-          </View>
-        )}
-        {isCalculating && !evacuando && (
-          <View style={[styles.evacuandoBanner, { backgroundColor: "#6366f1" }]}>
-            <ActivityIndicator size="small" color="#fff" style={{ marginRight: 6 }} />
-            <Text style={styles.evacuandoText}>Calculando ruta...</Text>
-          </View>
-        )}
-        {(evacuando || rutaSugerida) && resumenRuta && destinoFinal && (
-          <View style={styles.resumenBanner}>
-            <Text style={styles.resumenText}>
-              {iconoModo} {resumenRuta.distancia} · ⏱️ {resumenRuta.tiempo}
-            </Text>
-            <Text style={styles.resumenSub} numberOfLines={1}>→ {destinoFinal.nombre}</Text>
-          </View>
-        )}
-      </View>
+      <RouteStatusBanners
+        pickingFromIsochroneMap={pickingFromIsochroneMap}
+        evacuando={evacuando}
+        hasRouteCoords={routeCoords.length > 0}
+        rutaSugerida={rutaSugerida}
+        rutaRiesgosa={rutaRiesgosa}
+        isCalculating={isCalculating}
+        resumenRuta={resumenRuta}
+        destinoFinal={destinoFinal}
+        iconoModo={iconoModo}
+      />
 
       <MapView
         ref={mapRef}
@@ -1108,27 +698,16 @@ export default function MapViewContainer() {
         {routeCoords.length > 0 && <Polyline coordinates={routeCoords} strokeColor="#2196f3" strokeWidth={4} />}
         {dangerSegment.length > 0 && <Polyline coordinates={dangerSegment} strokeColor="#ef476f" strokeWidth={4} />}
 
-        {emergencyType === "inundacion" && (
-          <>
-            <Geojson geojson={InundMedia} strokeColor="rgba(30,144,255,0.5)" fillColor="rgba(30,144,255,0.12)" strokeWidth={1} />
-            <Geojson geojson={InundAlta} strokeColor="rgba(0,0,205,0.6)" fillColor="rgba(0,0,205,0.18)" strokeWidth={1} />
-          </>
-        )}
-        {emergencyType === "movimiento_en_masa" && (
-          <>
-            <Geojson geojson={mmBaja} strokeColor="rgba(255,215,0,0.5)" fillColor="rgba(255,215,0,0.12)" strokeWidth={1} />
-            <Geojson geojson={mmMedia} strokeColor="rgba(255,140,0,0.5)" fillColor="rgba(255,140,0,0.12)" strokeWidth={1} />
-            <Geojson geojson={mmAlta} strokeColor="rgba(139,0,0,0.6)" fillColor="rgba(139,0,0,0.18)" strokeWidth={1} />
-          </>
-        )}
-        {emergencyType === "avenida_torrencial" && (
-          <>
-            <Geojson geojson={avMedia} strokeColor="rgba(255,100,0,0.5)" fillColor="rgba(255,100,0,0.12)" strokeWidth={1} />
-            <Geojson geojson={avAlta} strokeColor="rgba(180,0,0,0.6)" fillColor="rgba(180,0,0,0.18)" strokeWidth={1} />
-          </>
-        )}
+        <MapHazardLayers
+          emergencyType={emergencyType}
+          mmBaja={mmBaja} mmMedia={mmMedia} mmAlta={mmAlta}
+          InundMedia={InundMedia} InundAlta={InundAlta}
+          avMedia={avMedia} avAlta={avAlta}
+        />
 
-        {mostrarIsocronas && isoTable && <IsochroneOverlay graph={getGraph()} table={isoTable} />}
+        {mostrarIsocronas && isoTable && graphForOverlay && (
+          <IsochroneOverlay graph={graphForOverlay} table={isoTable} />
+        )}
 
         {/* Destinos: uno solo (manual), todos cuando picking, o todos
             con el más cercano resaltado cuando modo "closest". */}
@@ -1153,9 +732,8 @@ export default function MapViewContainer() {
 
         {/* Instituciones: solo cuando el usuario las activa desde el
             flujo quickRoute, o cuando el usuario activó el toggle "Ver
-            lugares". Si el tap viene del overlay del wizard la institución
-            se toma como destino; si viene del toggle de visualización solo
-            abre la info sin cambiar el flujo. */}
+            lugares". Si viene de quickRoute la institución se toma como
+            destino; si viene del toggle solo abre la info del marker. */}
         {(showingInstitucionesOverlay || showLugares) && instituciones.map((inst) => (
           <Marker
             key={`inst-${inst.id}`}
@@ -1219,20 +797,33 @@ export default function MapViewContainer() {
             <MaterialIcons name="map" size={22} color="#fff" />
           </TouchableOpacity>
         )}
-        <TouchableOpacity style={styles.bottomRightBtn} onPress={handleCenterOnUser}>
+        <TouchableOpacity
+          style={styles.bottomRightBtn}
+          onPress={handleCenterOnUser}
+          accessibilityLabel="Centrar mapa en mi ubicación"
+          accessibilityRole="button"
+        >
           <MaterialIcons name="my-location" size={24} color="#073b4c" />
         </TouchableOpacity>
         {mostrarBotonReset && (
           <TouchableOpacity
             style={[styles.bottomRightBtn, { backgroundColor: "#fef2f2", borderWidth: 1.5, borderColor: "#fecaca" }]}
             onPress={handleResetConfirm}
+            accessibilityLabel={evacuando ? "Cancelar evacuación" : "Limpiar selección"}
+            accessibilityRole="button"
           >
             <MaterialIcons name="refresh" size={24} color="#dc2626" />
           </TouchableOpacity>
         )}
       </View>
 
-      <TouchableOpacity style={styles.emergencyButton} onPress={handleLlamarEmergencia}>
+      <TouchableOpacity
+        style={styles.emergencyButton}
+        onPress={handleLlamarEmergencia}
+        accessibilityLabel="Llamar a la línea de emergencia 123"
+        accessibilityRole="button"
+        accessibilityHint="Abre el marcador telefónico con el número 123"
+      >
         <MaterialIcons name="phone" size={28} color="#ffffff" />
       </TouchableOpacity>
 
@@ -1257,7 +848,7 @@ export default function MapViewContainer() {
                         onPress={() => { setMapType(type.value); setShowMapTypePicker(false); }}
                       >
                         <View style={[styles.mapTypeIconBox, isActive && styles.mapTypeIconBoxActive]}>
-                          <MaterialIcons name={type.icon as any} size={32} color={isActive ? "#118ab2" : "#073b4c"} />
+                          <MaterialIcons name={type.icon} size={32} color={isActive ? "#118ab2" : "#073b4c"} />
                         </View>
                         <Text style={[styles.mapTypeLabel, isActive && styles.mapTypeLabelActive]}>{type.label}</Text>
                       </TouchableOpacity>
@@ -1306,6 +897,8 @@ export default function MapViewContainer() {
             setShouldScrollToDestinos(true);
             navigation.dispatch(DrawerActions.openDrawer());
           }}
+          accessibilityLabel="Confirmar punto de inicio"
+          accessibilityRole="button"
         >
           <MaterialIcons name="check-circle" size={20} color="#ffffff" style={{ marginRight: 8 }} />
           <Text style={styles.confirmarPuntoButtonText}>CONFIRMAR PUNTO DE INICIO</Text>
@@ -1329,6 +922,9 @@ export default function MapViewContainer() {
             ]}
             onPress={handleIrAqui}
             disabled={isCalculating}
+            accessibilityLabel={isCalculating ? "Calculando ruta" : "Calcular ruta de evacuación"}
+            accessibilityRole="button"
+            accessibilityState={{ disabled: isCalculating, busy: isCalculating }}
           >
             {isCalculating ? (
               <ActivityIndicator size="small" color="#fff" style={{ marginRight: 8 }} />
@@ -1343,7 +939,12 @@ export default function MapViewContainer() {
       )}
 
       {evacuando && (
-        <TouchableOpacity style={styles.cancelarButton} onPress={handleResetConfirm}>
+        <TouchableOpacity
+          style={styles.cancelarButton}
+          onPress={handleResetConfirm}
+          accessibilityLabel="Cancelar evacuación en curso"
+          accessibilityRole="button"
+        >
           <Text style={styles.cancelarButtonText}>✕ CANCELAR EVACUACIÓN</Text>
         </TouchableOpacity>
       )}
@@ -1419,17 +1020,6 @@ const styles = StyleSheet.create({
     borderWidth: 2, borderColor: "#fff",
   },
   miniBadgeText: { color: "#78350f", fontSize: 10, fontWeight: "800" },
-  topRightGroup: { position: "absolute", top: 120, right: 20, zIndex: 10, gap: 8 },
-  squareButton: {
-    backgroundColor: "#ffffffee", width: 46, height: 46, borderRadius: 10,
-    alignItems: "center", justifyContent: "center",
-    shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4, elevation: 5,
-  },
-  roundButton: {
-    backgroundColor: "#ffffffee", width: 46, height: 46, borderRadius: 23,
-    alignItems: "center", justifyContent: "center",
-    shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4, elevation: 5,
-  },
   bottomRightGroup: { position: "absolute", bottom: 70, right: 20, zIndex: 10, gap: 10, alignItems: "flex-end" },
   bottomRightBtn: {
     backgroundColor: "#ffffffee", width: 50, height: 50, borderRadius: 25,
@@ -1442,36 +1032,6 @@ const styles = StyleSheet.create({
     alignItems: "center", justifyContent: "center",
     shadowColor: "#ef476f", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 8, elevation: 8,
   },
-  topBannersStack: {
-    position: "absolute", top: 170, left: 0, right: 0, zIndex: 10,
-    alignItems: "center", gap: 8,
-  },
-  pickingBanner: {
-    backgroundColor: "#10b981",
-    paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20,
-    flexDirection: "row", alignItems: "center", gap: 8,
-    elevation: 8, shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 8,
-  },
-  pickingBannerText: { color: "#fff", fontWeight: "700", fontSize: 13 },
-  evacuandoBanner: {
-    backgroundColor: "#073b4c", paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20,
-    flexDirection: "row", alignItems: "center", justifyContent: "center",
-    shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 8, elevation: 8,
-  },
-  evacuandoText: { color: "#ffffff", fontWeight: "700", fontSize: 14, includeFontPadding: false },
-  riskyBanner: {
-    backgroundColor: "#b91c1c", paddingHorizontal: 14, paddingVertical: 8, borderRadius: 18,
-    flexDirection: "row", alignItems: "center", gap: 6, maxWidth: "85%",
-    shadowColor: "#000", shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.3, shadowRadius: 6, elevation: 6,
-  },
-  riskyBannerText: { color: "#fff", fontWeight: "700", fontSize: 12, flexShrink: 1 },
-  resumenBanner: {
-    backgroundColor: "#ffffffee", paddingHorizontal: 20, paddingVertical: 8, borderRadius: 20,
-    elevation: 5, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15, shadowRadius: 4,
-    alignItems: "center", maxWidth: "70%",
-  },
-  resumenText: { color: "#073b4c", fontWeight: "700", fontSize: 13, includeFontPadding: false },
-  resumenSub: { color: "#6b7280", fontSize: 11, marginTop: 2 },
   isochroneInfoBanner: {
     backgroundColor: "rgba(255,255,255,0.95)",
     paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12,

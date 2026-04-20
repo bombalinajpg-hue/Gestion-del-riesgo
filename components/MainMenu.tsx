@@ -91,16 +91,16 @@ export default function MainMenu({ navigation }: DrawerContentComponentProps) {
   } = useRouteContext();
 
   useEffect(() => {
-    if (shouldScrollToDestinos) {
-      setTimeout(() => {
-        scrollRef.current?.scrollTo({
-          y: destinosYRef.current,
-          animated: true,
-        });
-      }, 300);
-      setShouldScrollToDestinos(false);
-    }
-  }, [shouldScrollToDestinos]);
+    if (!shouldScrollToDestinos) return;
+    const t = setTimeout(() => {
+      scrollRef.current?.scrollTo({
+        y: destinosYRef.current,
+        animated: true,
+      });
+    }, 300);
+    setShouldScrollToDestinos(false);
+    return () => clearTimeout(t);
+  }, [shouldScrollToDestinos, setShouldScrollToDestinos]);
 
   const parametrosBasicosListos =
     emergencyType !== "ninguna" && routeProfile !== null && startMode !== null;

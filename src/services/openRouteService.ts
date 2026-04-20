@@ -224,9 +224,14 @@ export const getRoute = async (
     let usedAvoidance = !!avoidPolygons;
     try {
       safeResponse = await openRouteService.post(`/${profile}`, body2);
-    } catch (firstError: any) {
-      const status = firstError.response?.status;
-      if (avoidPolygons && RETRYABLE_ORS_STATUSES.includes(status)) {
+    } catch (firstError: unknown) {
+      // ORS lanza AxiosError casi siempre, pero un fallo de red local
+      // (offline, timeout, TLS) puede dar objetos sin `.response`. No
+      // asumimos forma: `err as { response?: { status?: number } }`.
+      const status =
+        (firstError as { response?: { status?: number } } | null | undefined)
+          ?.response?.status;
+      if (avoidPolygons && typeof status === 'number' && RETRYABLE_ORS_STATUSES.includes(status)) {
         safeResponse = await openRouteService.post(`/${profile}`, {
           coordinates: [bestExitPoint, finalEnd],
           format: 'json',

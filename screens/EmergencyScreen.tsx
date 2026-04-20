@@ -65,6 +65,10 @@ export default function EmergencyScreen() {
   const goAuto = (type: EmergencyType) => {
     prepareState(type);
     setStartMode("gps");
+    // Modo GPS no debe arrastrar un startPoint manual previo: si el
+    // usuario hizo "elegir en el mapa" antes y ahora cambia a "desde
+    // mi ubicación", ese punto quedaría inconsistente con startMode.
+    setStartPoint(null);
     setDestinationMode("closest");
     router.push({ pathname: "/map", params: { autoRoute: "1" } });
   };
@@ -123,6 +127,9 @@ export default function EmergencyScreen() {
           style={styles.bigCallCard}
           onPress={() => call("123", "línea de emergencias 123")}
           activeOpacity={0.85}
+          accessibilityLabel="Llamar a la línea de emergencia 123"
+          accessibilityRole="button"
+          accessibilityHint="Abre el marcador telefónico con el número 123"
         >
           <MaterialIcons name="phone" size={40} color="#fff" />
           <View style={{ flex: 1, marginLeft: 14 }}>

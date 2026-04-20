@@ -14,12 +14,33 @@
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { serializeByKey } from '../utils/asyncQueue';
+import { persistPhoto } from '../utils/photoStorage';
+import { isValidCoord, isValidPhone } from '../utils/validation';
 import { getDeviceId } from './reportsService';
 import type { MissingPerson, MissingPersonStatus } from '../types/v4';
 
 const STORAGE_KEY = 'missing_persons_v1';
 const EXPIRY_MS = 7 * 24 * 60 * 60 * 1000;          // 7 días
 const POST_FOUND_RETENTION_MS = 48 * 60 * 60 * 1000; // 48 h
+// Cap defensivo. En la práctica la purga por expiración mantiene la
+// lista acotada; este cap evita que cualquier bug deje crecer el storage.
+const MAX_STORED_MISSING = 500;
+
+function isValidMissing(x: unknown): x is MissingPerson {
+  if (!x || typeof x !== 'object') return false;
+  const m = x as Record<string, unknown>;
+  return (
+    typeof m.id === 'string' &&
+    typeof m.name === 'string' &&
+    typeof m.description === 'string' &&
+    typeof m.lastSeenLat === 'number' &&
+    typeof m.lastSeenLng === 'number' &&
+    typeof m.reportedAt === 'string' &&
+    typeof m.reporterDeviceId === 'string' &&
+    typeof m.status === 'string'
+  );
+}
 
 function generateUuid(): string {
   const hex = (n: number) => n.toString(16).padStart(2, '0');
@@ -33,14 +54,24 @@ function generateUuid(): string {
 async function loadRaw(): Promise<MissingPerson[]> {
   try {
     const raw = await AsyncStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as MissingPerson[]) : [];
-  } catch {
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(isValidMissing);
+  } catch (e) {
+    console.warn('[missingPersonsService] loadRaw:', e);
     return [];
   }
 }
 
 async function saveRaw(items: MissingPerson[]): Promise<void> {
-  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+  const capped = items.length > MAX_STORED_MISSING
+    ? [...items]
+        .sort((a, b) =>
+          new Date(b.reportedAt).getTime() - new Date(a.reportedAt).getTime())
+        .slice(0, MAX_STORED_MISSING)
+    : items;
+  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(capped));
 }
 
 /** Purga expirados + los encontrados hace >48h */
@@ -93,28 +124,39 @@ export interface ReportMissingInput {
 export async function reportMissing(
   input: ReportMissingInput,
 ): Promise<MissingPerson> {
+  // Validación básica antes de tocar storage.
+  if (!isValidCoord(input.lastSeenLat, input.lastSeenLng)) {
+    throw new Error('Coordenadas inválidas para el reporte de desaparición.');
+  }
+  if (!isValidPhone(input.contactPhone)) {
+    throw new Error('Teléfono de contacto inválido.');
+  }
   const deviceId = await getDeviceId();
-  const now = new Date().toISOString();
-  const report: MissingPerson = {
-    id: generateUuid(),
-    name: input.name.trim(),
-    approximateAge: input.approximateAge,
-    description: input.description.trim(),
-    photoUri: input.photoUri,
-    lastSeenLat: input.lastSeenLat,
-    lastSeenLng: input.lastSeenLng,
-    lastSeenPlace: input.lastSeenPlace?.trim(),
-    lastSeenAt: input.lastSeenAt,
-    reportedAt: now,
-    contactPhone: input.contactPhone.trim(),
-    contactName: input.contactName.trim(),
-    status: 'desaparecida',
-    reporterDeviceId: deviceId,
-  };
-  const items = await loadRaw();
-  items.push(report);
-  await saveRaw(items);
-  return report;
+  // Persistimos la foto fuera del cache volátil del OS antes de guardar.
+  const persistedPhoto = await persistPhoto(input.photoUri);
+  return serializeByKey(STORAGE_KEY, async () => {
+    const now = new Date().toISOString();
+    const report: MissingPerson = {
+      id: generateUuid(),
+      name: input.name.trim(),
+      approximateAge: input.approximateAge,
+      description: input.description.trim(),
+      photoUri: persistedPhoto,
+      lastSeenLat: input.lastSeenLat,
+      lastSeenLng: input.lastSeenLng,
+      lastSeenPlace: input.lastSeenPlace?.trim(),
+      lastSeenAt: input.lastSeenAt,
+      reportedAt: now,
+      contactPhone: input.contactPhone.trim(),
+      contactName: input.contactName.trim(),
+      status: 'desaparecida',
+      reporterDeviceId: deviceId,
+    };
+    const items = await loadRaw();
+    items.push(report);
+    await saveRaw(items);
+    return report;
+  });
 }
 
 /**
@@ -124,22 +166,26 @@ export async function reportMissing(
  */
 export async function markAsFound(reportId: string): Promise<boolean> {
   const deviceId = await getDeviceId();
-  const items = await loadRaw();
-  const idx = items.findIndex((p) => p.id === reportId);
-  if (idx === -1) return false;
-  if (items[idx].reporterDeviceId !== deviceId) return false;
-  items[idx] = { ...items[idx], status: 'encontrada' };
-  await saveRaw(items);
-  return true;
+  return serializeByKey(STORAGE_KEY, async () => {
+    const items = await loadRaw();
+    const idx = items.findIndex((p) => p.id === reportId);
+    if (idx === -1) return false;
+    if (items[idx].reporterDeviceId !== deviceId) return false;
+    items[idx] = { ...items[idx], status: 'encontrada' };
+    await saveRaw(items);
+    return true;
+  });
 }
 
 export async function deleteReport(reportId: string): Promise<boolean> {
   const deviceId = await getDeviceId();
-  const items = await loadRaw();
-  const filtered = items.filter(
-    (p) => !(p.id === reportId && p.reporterDeviceId === deviceId),
-  );
-  if (filtered.length === items.length) return false;
-  await saveRaw(filtered);
-  return true;
+  return serializeByKey(STORAGE_KEY, async () => {
+    const items = await loadRaw();
+    const filtered = items.filter(
+      (p) => !(p.id === reportId && p.reporterDeviceId === deviceId),
+    );
+    if (filtered.length === items.length) return false;
+    await saveRaw(filtered);
+    return true;
+  });
 }

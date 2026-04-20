@@ -19,38 +19,29 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import FamilyGroupModal from "../components/FamilyGroupModal";
 import MissingPersonsModal from "../components/MissingPersonsModal";
 import ReportModal from "../components/ReportModal";
-import { getAllGroups } from "../src/services/familyGroupsService";
-import { getActiveMissing } from "../src/services/missingPersonsService";
-import {
-  getActiveBlockingAlerts,
-  recomputePublicAlerts,
-} from "../src/services/reportsService";
+import { useCommunityStatus } from "../src/hooks/useCommunityStatus";
 
 export default function CommunityScreen() {
   const router = useRouter();
   const [reportOpen, setReportOpen] = useState(false);
   const [familyOpen, setFamilyOpen] = useState(false);
   const [missingOpen, setMissingOpen] = useState(false);
-  const [alertCount, setAlertCount] = useState(0);
-  const [missingCount, setMissingCount] = useState(0);
-  const [groupCount, setGroupCount] = useState(0);
-
-  const refresh = async () => {
-    try {
-      await recomputePublicAlerts();
-      setAlertCount((await getActiveBlockingAlerts()).length);
-      setMissingCount((await getActiveMissing()).length);
-      setGroupCount((await getAllGroups()).length);
-    } catch (e) {
-      console.warn("[CommunityScreen] refresh:", e);
-    }
-  };
+  // Esta pantalla es donde el usuario ACTÚA sobre los datos sociales
+  // (reporta, crea grupos, marca desaparecidos). Pedimos recompute al
+  // enfocar para mostrar conteos clusterizados frescos.
+  const { alertCount, missingCount, groupCount, refresh } = useCommunityStatus();
 
   useFocusEffect(
     useCallback(() => {
-      refresh();
-    }, []),
+      refresh({ recompute: true, maxAgeMs: 5_000 });
+    }, [refresh]),
   );
+
+  // Callback para pasar a los modales: tras enviar un reporte/desaparecido/
+  // unirse a grupo, refrescamos conteos para que los badges se actualicen.
+  const onSubmitted = useCallback(() => {
+    refresh({ recompute: true });
+  }, [refresh]);
 
   return (
     <SafeAreaView style={styles.root} edges={["top", "bottom"]}>
@@ -197,20 +188,20 @@ export default function CommunityScreen() {
       <ReportModal
         visible={reportOpen}
         onClose={() => setReportOpen(false)}
-        onSubmitted={refresh}
+        onSubmitted={onSubmitted}
       />
       <FamilyGroupModal
         visible={familyOpen}
         onClose={() => {
           setFamilyOpen(false);
-          refresh();
+          onSubmitted();
         }}
       />
       <MissingPersonsModal
         visible={missingOpen}
         onClose={() => {
           setMissingOpen(false);
-          refresh();
+          onSubmitted();
         }}
       />
     </SafeAreaView>
