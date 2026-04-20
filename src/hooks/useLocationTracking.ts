@@ -25,6 +25,10 @@ export interface UseLocationTrackingResult {
   heading: number;
   loading: boolean;
   locationError: LocationError | null;
+  /** Reintenta la suscripción al GPS. Útil cuando el usuario regresó
+   *  de Ajustes tras otorgar permisos/activar GPS, o cuando el loading
+   *  lleva demasiado tiempo sin respuesta. */
+  retry: () => void;
 }
 
 export function useLocationTracking(): UseLocationTrackingResult {
@@ -32,6 +36,9 @@ export function useLocationTracking(): UseLocationTrackingResult {
   const [locationError, setLocationError] = useState<LocationError | null>(null);
   const [loading, setLoading] = useState(true);
   const [heading, setHeading] = useState(0);
+  // Cambiar este nonce fuerza re-ejecución del useEffect y reinicia toda
+  // la suscripción (nuevos listeners, nuevo permiso check, etc.).
+  const [retryNonce, setRetryNonce] = useState(0);
 
   useEffect(() => {
     if (DEV_MOCK_LOCATION) {
@@ -40,6 +47,9 @@ export function useLocationTracking(): UseLocationTrackingResult {
       setHeading(0);
       return;
     }
+    // Estado limpio al reintentar para que la UI vuelva al spinner.
+    setLocationError(null);
+    setLoading(true);
     let locSub: Location.LocationSubscription | undefined;
     let headSub: Location.LocationSubscription | undefined;
     let cancelled = false;
@@ -84,7 +94,11 @@ export function useLocationTracking(): UseLocationTrackingResult {
       }
     })();
     return () => { cancelled = true; locSub?.remove(); headSub?.remove(); };
-  }, []);
+    // retryNonce es la única dependencia "real" — el resto del efecto
+    // no depende de props. Cambiar nonce re-corre todo.
+  }, [retryNonce]);
 
-  return { location, heading, loading, locationError };
+  const retry = () => setRetryNonce((n) => n + 1);
+
+  return { location, heading, loading, locationError, retry };
 }

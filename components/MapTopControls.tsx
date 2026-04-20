@@ -19,6 +19,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import WeatherBadge from "./WeatherBadge";
 
 function NorthArrow({ heading }: { heading: number }) {
@@ -55,8 +56,15 @@ export default function MapTopControls({
   onToggleIsochrones,
   onToggleLugares,
 }: Props) {
+  const insets = useSafeAreaInsets();
+  // Posición dinámica: insets.top + margen fijo. Antes era `top: 120`
+  // estático, lo que en dispositivos con notch grande chocaba con la
+  // barra de estado y en dispositivos sin notch dejaba hueco.
   return (
-    <View style={styles.group} pointerEvents="box-none">
+    <View
+      style={[styles.group, { top: insets.top + 64 }]}
+      pointerEvents="box-none"
+    >
       <TouchableOpacity
         style={styles.squareButton}
         onPress={onOpenMapTypePicker}
@@ -98,7 +106,8 @@ export default function MapTopControls({
 }
 
 const styles = StyleSheet.create({
-  group: { position: "absolute", top: 120, right: 20, zIndex: 10, gap: 8 },
+  // `top` se aplica dinámicamente en el JSX vía useSafeAreaInsets.
+  group: { position: "absolute", right: 20, zIndex: 10, gap: 8 },
   squareButton: {
     backgroundColor: "#ffffffee", width: 46, height: 46, borderRadius: 10,
     alignItems: "center", justifyContent: "center",

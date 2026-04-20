@@ -164,7 +164,16 @@ export default function MapViewContainer() {
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
   // GPS + heading encapsulados en hook; ver src/hooks/useLocationTracking.ts.
-  const { location, heading, loading, locationError } = useLocationTracking();
+  const { location, heading, loading, locationError, retry: retryLocation } = useLocationTracking();
+  // Tras 10 s en loading el usuario suele pensar que la app se colgó.
+  // Mostramos un fallback con "Reintentar" + "Abrir configuración" para
+  // que tenga una salida en vez de quedarse viendo el spinner.
+  const [slowLoading, setSlowLoading] = useState(false);
+  useEffect(() => {
+    if (!loading || location) { setSlowLoading(false); return; }
+    const t = setTimeout(() => setSlowLoading(true), 10_000);
+    return () => clearTimeout(t);
+  }, [loading, location]);
   // Estado de ruta (routeCoords, destinoFinal, evacuando, rutaSugerida,
   // rutaRiesgosa, resumen, alertaDangerMostrada) + calcularRuta viven
   // en useRoutePlanning. Se instancia más abajo, tras tener location,
@@ -558,6 +567,31 @@ export default function MapViewContainer() {
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#ef476f" />
         <Text style={{ marginTop: 12, color: "#073b4c", fontWeight: "600" }}>Obteniendo ubicación...</Text>
+        {slowLoading && (
+          <>
+            <Text style={{ marginTop: 16, color: "#6b7280", fontSize: 12, textAlign: "center", paddingHorizontal: 32 }}>
+              Está tardando más de lo normal. Revisa que el GPS esté activo o reintenta.
+            </Text>
+            <View style={{ flexDirection: "row", gap: 10, marginTop: 16 }}>
+              <TouchableOpacity
+                style={{ backgroundColor: "#118ab2", paddingVertical: 10, paddingHorizontal: 18, borderRadius: 20 }}
+                onPress={retryLocation}
+                accessibilityRole="button"
+                accessibilityLabel="Reintentar obtener ubicación"
+              >
+                <Text style={{ color: "#fff", fontWeight: "700", fontSize: 13 }}>Reintentar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={{ backgroundColor: "#e5e7eb", paddingVertical: 10, paddingHorizontal: 18, borderRadius: 20 }}
+                onPress={() => Linking.openSettings()}
+                accessibilityRole="button"
+                accessibilityLabel="Abrir configuración del sistema"
+              >
+                <Text style={{ color: "#0f172a", fontWeight: "700", fontSize: 13 }}>Abrir ajustes</Text>
+              </TouchableOpacity>
+            </View>
+          </>
+        )}
       </View>
     );
 
@@ -811,11 +845,13 @@ export default function MapViewContainer() {
       <TouchableOpacity
         style={styles.emergencyButton}
         onPress={handleLlamarEmergencia}
+        activeOpacity={0.85}
         accessibilityLabel="Llamar a la línea de emergencia 123"
         accessibilityRole="button"
         accessibilityHint="Abre el marcador telefónico con el número 123"
       >
-        <MaterialIcons name="phone" size={28} color="#ffffff" />
+        <MaterialIcons name="phone" size={22} color="#ffffff" />
+        <Text style={styles.emergencyButtonText}>123</Text>
       </TouchableOpacity>
 
       <Modal visible={showMapTypePicker} transparent animationType="slide" onRequestClose={() => setShowMapTypePicker(false)}>
@@ -1030,18 +1066,37 @@ const styles = StyleSheet.create({
     borderWidth: 2, borderColor: "#fff",
   },
   miniBadgeText: { color: "#78350f", fontSize: 10, fontWeight: "800" },
-  bottomRightGroup: { position: "absolute", bottom: 70, right: 20, zIndex: 10, gap: 10, alignItems: "flex-end" },
+  // Botones secundarios del mapa (centrar / reset) se suben para dejar
+  // bottom-right al 123 — misma posición que en HomeScreen para que el
+  // usuario no tenga que aprender dos layouts distintos.
+  bottomRightGroup: { position: "absolute", bottom: 90, right: 20, zIndex: 10, gap: 10, alignItems: "flex-end" },
   bottomRightBtn: {
     backgroundColor: "#ffffffee", width: 50, height: 50, borderRadius: 25,
     alignItems: "center", justifyContent: "center",
     shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 4, elevation: 5,
   },
+  // Pill 123 estilo gemelo al del Home (mismo rojo `#dc2626`, padding,
+  // sombra). Antes era un FAB redondo en la izquierda — cambiar a pill
+  // right mantiene consistencia inter-pantalla.
   emergencyButton: {
-    position: "absolute", bottom: 70, left: 20, zIndex: 10,
-    backgroundColor: "#ef476f", width: 56, height: 56, borderRadius: 28,
-    alignItems: "center", justifyContent: "center",
-    shadowColor: "#ef476f", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 8, elevation: 8,
+    position: "absolute",
+    bottom: 24,
+    right: 20,
+    zIndex: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "#dc2626",
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderRadius: 30,
+    shadowColor: "#dc2626",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.5,
+    shadowRadius: 12,
+    elevation: 10,
   },
+  emergencyButtonText: { color: "#fff", fontWeight: "800", fontSize: 16 },
   // FAB "Configurar" — teal `#0f766e` para comunicar "acción secundaria,
   // tranquila, de configuración". El rojo queda reservado para acciones
   // de pánico (Home CTA "Evacua" + 123). Pill bottom-center.

@@ -31,13 +31,12 @@ import { useRouteContext } from "../context/RouteContext";
 import { useCommunityStatus } from "../src/hooks/useCommunityStatus";
 import type { EmergencyType } from "../src/types/types";
 
-// Helper de pluralización en español. Antes vivía inline como tres
-// ternarios anidados en HomeScreen ("alerta{s} ciudadana{s} activa{s}")
-// y era fácil de leer mal. Acá concentramos la regla.
+// Helper de pluralización en español. El texto corto ("N alertas cerca")
+// funciona mejor en barras angostas que la forma larga anterior — la
+// palabra "ciudadana" no agrega información en este contexto porque es
+// el único tipo de alerta que la app muestra en la barra.
 function pluralizeAlerts(count: number): string {
-  return count === 1
-    ? "1 alerta ciudadana activa cerca"
-    : `${count} alertas ciudadanas activas cerca`;
+  return count === 1 ? "1 alerta cerca" : `${count} alertas cerca`;
 }
 
 type MaterialIconName = React.ComponentProps<typeof MaterialIcons>["name"];
@@ -186,6 +185,7 @@ export default function HomeScreen() {
             <View style={styles.heroInfoHint}>
               <MaterialIcons name="info-outline" size={14} color="#ffd166" />
               <Text style={styles.heroInfoHintText}>Acerca de</Text>
+              <MaterialIcons name="chevron-right" size={14} color="#ffd166" />
             </View>
             <View style={styles.heroBadge}>
               <MaterialIcons name="shield" size={14} color="#ffffff" />
@@ -197,12 +197,6 @@ export default function HomeScreen() {
             <Text style={styles.heroSubtitle}>
               Prepárate · Actúa · Comunica
             </Text>
-            <View style={styles.heroDecoration}>
-              <View style={[styles.heroDot, { backgroundColor: "#ef476f" }]} />
-              <View style={[styles.heroDot, { backgroundColor: "#ffd166" }]} />
-              <View style={[styles.heroDot, { backgroundColor: "#06d6a0" }]} />
-              <View style={[styles.heroDot, { backgroundColor: "#118ab2" }]} />
-            </View>
           </TouchableOpacity>
 
           {/* ── ALERT BAR (si hay alertas activas en zona) ──────────────── */}
@@ -253,6 +247,8 @@ export default function HomeScreen() {
                 style={styles.gridCard}
                 onPress={() => router.push(mod.screen)}
                 activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel={`${mod.title}. ${mod.subtitle}`}
               >
                 <View
                   style={[
@@ -372,12 +368,6 @@ const styles = StyleSheet.create({
     fontWeight: "500",
     letterSpacing: 0.3,
   },
-  heroDecoration: {
-    flexDirection: "row",
-    gap: 6,
-    marginTop: 16,
-  },
-  heroDot: { width: 10, height: 10, borderRadius: 5 },
   heroInfoHint: {
     position: "absolute",
     top: 12,
@@ -467,7 +457,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   gridCard: {
-    width: "47.5%",
+    // 2 cards por fila con gap: 12 en el contenedor. `flex: 1` + flexBasis
+    // cerca del 48 % asegura que SIEMPRE entren 2 columnas sin desbordar
+    // en pantallas angostas (<370 pt) donde "47.5 %" antes se pasaba.
+    flexBasis: "47%",
+    flexGrow: 1,
     backgroundColor: "#ffffff",
     borderRadius: 16,
     padding: 14,
