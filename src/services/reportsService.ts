@@ -21,6 +21,8 @@ import type {
   ReportSeverity,
   ReportType,
 } from "../types/graph";
+import { getActiveMunicipioId } from "../hooks/useMunicipio";
+import { apiCreateReport } from "./apiReports";
 import { serializeByKey } from "../utils/asyncQueue";
 import { haversineMeters } from "../utils/haversine";
 import { persistPhoto } from "../utils/photoStorage";
@@ -205,6 +207,18 @@ export async function submitReport(
 
   if (!result.ok) return result;
 
+  // ─── Dual-write al backend (best-effort) ──────────────────────────────
+  // Guardamos siempre local primero para resistir offline; después
+  // empujamos al API si está disponible. Si el API falla, la app sigue
+  // funcionando con los reports locales — el usuario no se entera.
+  //
+  // Foto: el `photoUri` es un archivo local; no lo subimos al backend
+  // por ahora (requeriría Firebase Storage para alojar la imagen).
+  // Cuando eso esté, mandamos el `photo_url` firmado.
+  void pushReportToApi(result.report).catch((e) =>
+    console.warn("[reportsService] push al API falló (retry pendiente):", e),
+  );
+
   const newAlerts = await recomputePublicAlerts();
   const matching = newAlerts.find((a) => a.reportIds.includes(result.report.id));
 
@@ -216,6 +230,23 @@ export async function submitReport(
         ? matching
         : undefined,
   };
+}
+
+async function pushReportToApi(report: CitizenReport): Promise<void> {
+  const municipioId = getActiveMunicipioId();
+  if (!municipioId) {
+    // Sin municipio resuelto aún (primer launch sin red); omitimos el
+    // push. El reporte queda local y se intentará re-empujar más adelante
+    // cuando implementemos la cola de retry.
+    return;
+  }
+  await apiCreateReport({
+    municipio_id: municipioId,
+    type: report.type,
+    severity: report.severity,
+    note: report.note,
+    location: { lat: report.lat, lng: report.lng },
+  });
 }
 
 // ─── Clustering ─────────────────────────────────────────────────────────────

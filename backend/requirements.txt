@@ -1,0 +1,32 @@
+# ─── Framework web ────────────────────────────────────────────────
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.12       # form-data / file uploads
+
+# ─── Base de datos (async) ────────────────────────────────────────
+sqlalchemy[asyncio]==2.0.35
+asyncpg==0.29.0                 # driver async — lo usa FastAPI en runtime
+psycopg2-binary==2.9.10         # driver sync — lo usa Alembic para migraciones
+geoalchemy2==0.15.2             # extiende SQLAlchemy con tipos PostGIS
+alembic==1.13.3                 # migraciones
+
+# ─── Config y validación ──────────────────────────────────────────
+pydantic==2.9.2
+pydantic-settings==2.5.2
+
+# ─── Auth (Firebase) ──────────────────────────────────────────────
+firebase-admin==6.5.0           # verificación de ID tokens
+
+# ─── Geo (scripts de ingesta) ─────────────────────────────────────
+# GeoPandas carga shapefile/geojson/gpkg; Shapely hace ops geométricas.
+# Fiona es el backend de I/O de GeoPandas. pyproj para reproyecciones.
+geopandas==1.0.1
+shapely==2.0.6
+fiona==1.10.1
+pyproj==3.7.0
+
+# ─── Dev / tests ──────────────────────────────────────────────────
+pytest==8.3.3
+pytest-asyncio==0.24.0
+httpx==0.27.2                   # cliente HTTP async para tests
+ruff==0.6.9                     # linter + formatter

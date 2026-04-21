@@ -1,0 +1,66 @@
+# docker-compose.yml — desarrollo local del backend.
+#
+# Levanta dos servicios:
+#   · postgres: PostgreSQL 16 con extensión PostGIS 3.4 ya instalada.
+#   · api:      FastAPI en modo --reload, monta ./backend como volumen
+#                para hot-reload durante desarrollo.
+#
+# Uso:
+#   docker compose up -d            # levanta en background
+#   docker compose logs -f api      # ver logs del backend
+#   docker compose down             # para los contenedores
+#   docker compose down -v          # + borra datos de la DB (reset)
+#
+# Las credenciales acá son solo para dev local. En Fly.io se inyectan
+# via secrets, nunca commiteadas.
+
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    container_name: rutas_postgres
+    environment:
+      POSTGRES_USER: rutas
+      POSTGRES_PASSWORD: dev_password
+      POSTGRES_DB: rutas
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rutas -d rutas"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: rutas_api
+    environment:
+      DATABASE_URL: postgresql+asyncpg://rutas:dev_password@postgres:5432/rutas
+      # Firebase service account para verificar tokens; en dev lo montás
+      # como volumen o apuntás a un archivo local (ver README).
+      FIREBASE_CREDENTIALS_PATH: /app/firebase-credentials.json
+      APP_ENV: development
+      LOG_LEVEL: debug
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      # Monta las credenciales de Firebase desde el host (ignoradas por
+      # git). El dev las descarga de console.firebase.google.com y las
+      # pone en backend/firebase-credentials.json localmente.
+      - ./backend/firebase-credentials.json:/app/firebase-credentials.json:ro
+      # Data del proyecto (hazards, refugios, instituciones) — read-only
+      # para el seed_municipio.py. La app RN también los tiene bundled;
+      # compartir el mismo origen garantiza que backend y app mostren
+      # los mismos datos hasta que migremos los reads al API.
+      - ./data:/seed:ro
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+volumes:
+  postgres_data:

@@ -14,7 +14,7 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActionSheetIOS,
   Alert,
@@ -75,7 +75,50 @@ export default function ReportModal({
   const [location, setLocation] = useState<{ lat: number; lng: number } | null>(
     initialLocation ?? null,
   );
+  const [locationState, setLocationState] = useState<
+    "idle" | "loading" | "denied" | "disabled" | "error"
+  >("idle");
   const [submitting, setSubmitting] = useState(false);
+
+  // Resolver ubicación al abrir el modal. Flujo:
+  //   1. Pedir permiso explícitamente (antes fallaba silencioso si el
+  //      usuario nunca había otorgado la app el permiso de ubicación).
+  //   2. Intentar `getLastKnownPositionAsync` (instantáneo, casi siempre
+  //      tiene fix reciente).
+  //   3. Si no hay fix, pedir `getCurrentPositionAsync` con accuracy
+  //      `Balanced` (más rápido que High, suficiente para un reporte).
+  //   4. Estados explícitos: loading/denied/disabled/error para que el
+  //      UI pueda mostrar mensaje + retry en vez de deshabilitar el
+  //      botón de publicar sin explicación.
+  const resolveLocation = useCallback(async () => {
+    setLocationState("loading");
+    try {
+      const enabled = await Location.hasServicesEnabledAsync();
+      if (!enabled) {
+        setLocationState("disabled");
+        return;
+      }
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") {
+        setLocationState("denied");
+        return;
+      }
+      const last = await Location.getLastKnownPositionAsync();
+      if (last) {
+        setLocation({ lat: last.coords.latitude, lng: last.coords.longitude });
+        setLocationState("idle");
+        return;
+      }
+      const pos = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+      setLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+      setLocationState("idle");
+    } catch (e) {
+      console.warn("[ReportModal] location:", e);
+      setLocationState("error");
+    }
+  }, []);
 
   useEffect(() => {
     if (!visible) {
@@ -84,19 +127,12 @@ export default function ReportModal({
       setNote('');
       setPhotoUri(null);
       setSubmitting(false);
-    } else if (!location) {
-      (async () => {
-        try {
-          const pos = await Location.getCurrentPositionAsync({
-            accuracy: Location.Accuracy.High,
-          });
-          setLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude });
-        } catch {
-          // continuar sin ubicación — el submit la validará
-        }
-      })();
+      return;
     }
-  }, [visible]);
+    if (!location) {
+      void resolveLocation();
+    }
+  }, [visible, location, resolveLocation]);
 
   // ─── Manejo de foto ──────────────────────────────────────────────────────
 
@@ -393,18 +429,39 @@ export default function ReportModal({
               </>
             )}
 
-            {/* UBICACIÓN */}
+            {/* UBICACIÓN — estados explícitos para que el usuario sepa
+                por qué el botón está deshabilitado (si lo está). */}
             <View style={styles.locationInfo}>
               <MaterialIcons
-                name="location-on"
+                name={location ? 'location-on' : 'location-off'}
                 size={16}
-                color={location ? '#10b981' : '#9ca3af'}
+                color={
+                  location ? '#10b981'
+                  : locationState === 'loading' ? '#6366f1'
+                  : '#dc2626'
+                }
               />
-              <Text style={styles.locationText}>
-                {location
-                  ? `${location.lat.toFixed(5)}, ${location.lng.toFixed(5)}`
-                  : 'Obteniendo ubicación...'}
-              </Text>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.locationText}>
+                  {location
+                    ? `${location.lat.toFixed(5)}, ${location.lng.toFixed(5)}`
+                    : locationState === 'loading' ? 'Obteniendo ubicación...'
+                    : locationState === 'denied' ? 'Permiso de ubicación denegado'
+                    : locationState === 'disabled' ? 'GPS desactivado'
+                    : locationState === 'error' ? 'No se pudo obtener ubicación'
+                    : 'Sin ubicación'}
+                </Text>
+              </View>
+              {!location && locationState !== 'loading' && (
+                <TouchableOpacity
+                  onPress={resolveLocation}
+                  style={styles.retryBtn}
+                  accessibilityRole="button"
+                  accessibilityLabel="Reintentar obtener ubicación"
+                >
+                  <Text style={styles.retryBtnText}>Reintentar</Text>
+                </TouchableOpacity>
+              )}
             </View>
 
             <Text style={styles.privacyNote}>
@@ -569,6 +626,13 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   locationText: { fontSize: 12, color: '#374151' },
+  retryBtn: {
+    backgroundColor: '#4338ca',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 12,
+  },
+  retryBtnText: { color: '#fff', fontSize: 11, fontWeight: '700' },
   privacyNote: {
     fontSize: 11,
     color: '#6b7280',

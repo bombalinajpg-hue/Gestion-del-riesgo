@@ -3,6 +3,10 @@
   "compilerOptions": {
     "strict": true,
     "moduleResolution": "bundler",
+    // Hace que TS siga la condición `react-native` de los exports maps.
+    // Necesario para que Firebase v12 expose `getReactNativePersistence`
+    // desde `firebase/auth` (vive solo en el build de RN, no en el default).
+    "customConditions": ["react-native"],
     "paths": {
       "@/*": ["./*"]
     }
