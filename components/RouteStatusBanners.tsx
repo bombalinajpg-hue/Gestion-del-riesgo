@@ -1,24 +1,21 @@
 /**
  * Stack de banners superiores del mapa.
  *
- * Invariante de diseño: **como máximo 2 banners visibles a la vez**.
- * Antes podían convivir hasta 4-5 (picking + evacuando + sugerida +
- * riesgosa + resumen + calculando), tapando la mitad del mapa.
+ * Banners posibles (orden vertical de arriba hacia abajo):
+ *   1. "Toca un refugio" (picking mode) — exclusivo, no convive con otros
+ *   2. Status principal:
+ *        · 🚨 Evacuando
+ *        · 🧭 Ruta sugerida
+ *        · Calculando ruta…
+ *   3. Resumen (iconoModo · distancia · tiempo · destino) — barra aparte,
+ *      solo para evacuando/sugerida. El usuario pidió explícitamente
+ *      que status y resumen sean DOS barras distintas, no un banner
+ *      compuesto — así el status queda claro de un vistazo y el detalle
+ *      técnico vive debajo sin saturar la línea principal.
+ *   4. Warning ⚠️ ruta no garantizada — solo si rutaRiesgosa.
  *
- * Regla de prioridad (solo una del primer bloque, opcionalmente el
- * warning riesgoso como segundo):
- *
- *   1. pickingFromIsochroneMap   ← modo de selección, prioritario
- *   2. evacuando (con resumen inline)
- *   3. isCalculating             ← transitorio
- *   4. rutaSugerida (con resumen inline)
- *
- *   + (opcional) rutaRiesgosa    ← solo si hay ruta calculada (sugerida
- *                                   o evacuando), como warning secundario.
- *
- * El resumen (distancia · tiempo · destino) se mergió dentro del banner
- * de evacuando/sugerida en vez de vivir en su propio banner — así una
- * ruta activa ocupa una sola fila en vez de dos.
+ * `picking` sigue siendo exclusivo (no hay ruta para mostrar resumen).
+ * `calculating` no tiene resumen (aún no hay datos).
  */
 
 import { MaterialIcons } from "@expo/vector-icons";
@@ -48,30 +45,33 @@ export default function RouteStatusBanners({
   rutaSugerida, rutaRiesgosa, isCalculating,
   resumenRuta, destinoFinal, iconoModo,
 }: Props) {
-  // Primer banner (exclusivo): el de mayor prioridad según el estado.
-  let primaryBanner: React.ReactNode = null;
+  // Picking mode es exclusivo.
   if (pickingFromIsochroneMap) {
-    primaryBanner = (
-      <View style={styles.pickingBanner}>
-        <MaterialIcons name="touch-app" size={18} color="#fff" />
-        <Text style={styles.pickingBannerText}>
-          Toca un refugio en el mapa para elegirlo
-        </Text>
+    return (
+      <View style={styles.topBannersStack} pointerEvents="box-none">
+        <View style={styles.pickingBanner}>
+          <MaterialIcons name="touch-app" size={18} color="#fff" />
+          <Text style={styles.pickingBannerText}>
+            Toca un refugio en el mapa para elegirlo
+          </Text>
+        </View>
       </View>
     );
-  } else if (evacuando && hasRouteCoords) {
-    primaryBanner = (
+  }
+
+  // Status banner: evacuando / sugerida / calculando (uno solo, el activo).
+  let statusBanner: React.ReactNode = null;
+  let showResumen = false;
+
+  if (evacuando && hasRouteCoords) {
+    statusBanner = (
       <View style={styles.statusBanner}>
         <Text style={styles.statusBannerTitle}>🚨 Evacuando</Text>
-        {resumenRuta && destinoFinal && (
-          <Text style={styles.statusBannerMeta} numberOfLines={1}>
-            {iconoModo} {resumenRuta.distancia} · ⏱️ {resumenRuta.tiempo} · {destinoFinal.nombre}
-          </Text>
-        )}
       </View>
     );
+    showResumen = true;
   } else if (isCalculating) {
-    primaryBanner = (
+    statusBanner = (
       <View style={[styles.statusBanner, { backgroundColor: "#6366f1" }]}>
         <View style={styles.inlineRow}>
           <ActivityIndicator size="small" color="#fff" style={{ marginRight: 6 }} />
@@ -80,20 +80,26 @@ export default function RouteStatusBanners({
       </View>
     );
   } else if (rutaSugerida) {
-    primaryBanner = (
+    statusBanner = (
       <View style={[styles.statusBanner, { backgroundColor: "#118ab2" }]}>
         <Text style={styles.statusBannerTitle}>🧭 Ruta sugerida</Text>
-        {resumenRuta && destinoFinal && (
-          <Text style={styles.statusBannerMeta} numberOfLines={1}>
-            {iconoModo} {resumenRuta.distancia} · ⏱️ {resumenRuta.tiempo} · {destinoFinal.nombre}
-          </Text>
-        )}
       </View>
     );
+    showResumen = true;
   }
 
-  // Segundo banner (warning): solo si hay ruta calculada y es riesgosa.
-  // Nunca se muestra junto con `picking` (ahí no hay ruta).
+  const resumenBanner =
+    showResumen && resumenRuta && destinoFinal ? (
+      <View style={styles.resumenBanner}>
+        <Text style={styles.resumenText} numberOfLines={1}>
+          {iconoModo} {resumenRuta.distancia} · ⏱️ {resumenRuta.tiempo}
+        </Text>
+        <Text style={styles.resumenDest} numberOfLines={1}>
+          → {destinoFinal.nombre}
+        </Text>
+      </View>
+    ) : null;
+
   const riskyBanner =
     rutaRiesgosa && (evacuando || rutaSugerida) ? (
       <View style={styles.riskyBanner}>
@@ -104,19 +110,23 @@ export default function RouteStatusBanners({
       </View>
     ) : null;
 
-  if (!primaryBanner && !riskyBanner) return null;
+  if (!statusBanner && !resumenBanner && !riskyBanner) return null;
 
   return (
     <View style={styles.topBannersStack} pointerEvents="box-none">
-      {primaryBanner}
+      {statusBanner}
+      {resumenBanner}
       {riskyBanner}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  // `top: 190` da más aire respecto al chip "EvacuApp" que vive en top: 60
+  // (~45 de alto → termina en 105). Antes era 170, casi pegado. Ahora hay
+  // ~80 px de respiro vertical para que no se sienta apelmazado.
   topBannersStack: {
-    position: "absolute", top: 170, left: 0, right: 0, zIndex: 10,
+    position: "absolute", top: 190, left: 0, right: 0, zIndex: 10,
     alignItems: "center", gap: 8,
   },
   pickingBanner: {
@@ -133,9 +143,18 @@ const styles = StyleSheet.create({
     maxWidth: "88%",
     shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 8, elevation: 8,
   },
-  statusBannerTitle: { color: "#fff", fontWeight: "800", fontSize: 14, includeFontPadding: false },
-  statusBannerMeta: { color: "rgba(255,255,255,0.88)", fontSize: 12, marginTop: 2, textAlign: "center" },
+  statusBannerTitle: { color: "#fff", fontWeight: "800", fontSize: 15, includeFontPadding: false },
   inlineRow: { flexDirection: "row", alignItems: "center" },
+  // Resumen ahora es banner propio (blanco translúcido, contraste con el
+  // fondo oscuro del status banner que queda arriba).
+  resumenBanner: {
+    backgroundColor: "#ffffffee",
+    paddingHorizontal: 18, paddingVertical: 8, borderRadius: 18,
+    alignItems: "center", maxWidth: "88%",
+    shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15, shadowRadius: 4, elevation: 4,
+  },
+  resumenText: { color: "#073b4c", fontWeight: "700", fontSize: 13, includeFontPadding: false },
+  resumenDest: { color: "#64748b", fontSize: 11, marginTop: 1 },
   riskyBanner: {
     backgroundColor: "#b91c1c", paddingHorizontal: 14, paddingVertical: 8, borderRadius: 18,
     flexDirection: "row", alignItems: "center", gap: 6, maxWidth: "85%",

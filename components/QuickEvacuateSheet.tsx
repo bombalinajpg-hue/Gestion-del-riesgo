@@ -82,6 +82,11 @@ export default function QuickEvacuateSheet({ visible, onClose, onConfirm }: Prop
     }
   }, [visible]);
 
+  // La sheet solo pregunta emergencia + origen. El destino siempre es
+  // "closest" (refugio más seguro y cercano, según pesos del perfil) —
+  // eso no lo elige el usuario para mantener el flujo corto. El botón
+  // "Empezar" sigue existiendo como confirmación explícita antes de
+  // navegar al mapa, que es donde el flujo continúa.
   const canConfirm = emergency !== null && start !== null;
 
   const handleConfirm = () => {

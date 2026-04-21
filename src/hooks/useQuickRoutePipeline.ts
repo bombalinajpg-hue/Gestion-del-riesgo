@@ -119,12 +119,14 @@ export function useQuickRoutePipeline(params: UseQuickRoutePipelineParams) {
     setPuntoConfirmado(true);
 
     if (destinationMode === "closest") {
-      const t = setTimeout(() => {
-        const h = handlersRef.current;
-        h.setCalculating(() => h.calcularRuta(true));
-        setQuickRouteMode(false);
-      }, 280);
-      return () => clearTimeout(t);
+      // Sin delay: el delay existía para dejar terminar la animación del
+      // Alert de método, pero este branch no abre Alert — va directo a
+      // calcular. Cualquier delay aquí produce un parpadeo donde
+      // CONFIRMAR PUNTO o CALCULAR RUTA asoman un instante.
+      const h = handlersRef.current;
+      h.setCalculating(() => h.calcularRuta(true));
+      setQuickRouteMode(false);
+      return;
     }
 
     const t = setTimeout(() => {

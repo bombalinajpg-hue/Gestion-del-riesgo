@@ -137,17 +137,23 @@ export default function SafetyStatusModal({
 
   const handleWhatsApp = async (status: Status) => {
     const message = buildMessage(status);
-    const url = `whatsapp://send?text=${encodeURIComponent(message)}`;
-    const can = await Linking.canOpenURL(url);
-    if (!can) {
-      Alert.alert(
-        'WhatsApp no disponible',
-        'No se encontró la app instalada en tu dispositivo.',
-      );
-      return;
+    // Usamos el universal link `wa.me` en vez de `whatsapp://send`:
+    //   · iOS requiere que `whatsapp` esté en LSApplicationQueriesSchemes
+    //     para que `canOpenURL` devuelva true; en Expo Go no podemos
+    //     editar ese plist, así que el check fallaba incluso con WhatsApp
+    //     instalado y mostraba "WhatsApp no disponible" por nada.
+    //   · `https://wa.me/?text=...` lo atrapa WhatsApp como universal
+    //     link y abre directo la app si está instalada. Si no lo está,
+    //     el sistema abre el navegador con la página wa.me (fallback
+    //     razonable).
+    const url = `https://wa.me/?text=${encodeURIComponent(message)}`;
+    try {
+      await Linking.openURL(url);
+      onClose();
+    } catch (e) {
+      console.warn('[SafetyStatus] handleWhatsApp:', e);
+      Alert.alert('No se pudo abrir WhatsApp', 'Intenta compartir por otro medio.');
     }
-    await Linking.openURL(url);
-    onClose();
   };
 
   const handleSMS = async (status: Status) => {

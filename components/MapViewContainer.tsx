@@ -609,7 +609,7 @@ export default function MapViewContainer() {
   // GPS (no solo manual) para obligar a una confirmación antes de elegir
   // destino. No aplica en quickRouteMode (Emergency auto-confirma).
   const puntoPendiente =
-    !puntoConfirmado && !evacuando && !quickRouteMode &&
+    !puntoConfirmado && !evacuando && !quickRouteMode && !isCalculating &&
     !pickingFromIsochroneMap && !showingInstitucionesOverlay &&
     emergencyType !== "ninguna" && routeProfile !== null &&
     ((startMode === "gps" && location !== null) ||
