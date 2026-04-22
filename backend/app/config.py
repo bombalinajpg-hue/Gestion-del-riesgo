@@ -22,7 +22,14 @@ class Settings(BaseSettings):
     # DB
     database_url: str
 
-    # Firebase
+    # Firebase — dos modos de cargar credenciales:
+    #   · `firebase_credentials_json`: contenido JSON inline como string.
+    #     Úsalo en Railway/Fly/Render donde no puedes montar archivos;
+    #     pegas el JSON completo como variable de entorno.
+    #   · `firebase_credentials_path`: ruta a un archivo en disco.
+    #     Úsalo en dev local (el archivo queda gitignored).
+    # Si ambos están puestos, gana el JSON inline (más seguro para prod).
+    firebase_credentials_json: str | None = None
     firebase_credentials_path: str = "./firebase-credentials.json"
 
     # Runtime

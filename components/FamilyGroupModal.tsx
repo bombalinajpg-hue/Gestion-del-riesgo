@@ -31,7 +31,7 @@ import {
   leaveGroup,
   updateMyLocation,
 } from "../src/services/familyGroupsService";
-import { getDeviceId } from "../src/services/reportsService";
+import { apiMe } from "../src/services/apiMe";
 import type { FamilyGroup } from "../src/types/v4";
 
 interface Props {
@@ -45,13 +45,36 @@ export default function FamilyGroupModal({ visible, onClose }: Props) {
   const [mode, setMode] = useState<Mode>("menu");
   const [groups, setGroups] = useState<FamilyGroup[]>([]);
   const [activeGroup, setActiveGroup] = useState<FamilyGroup | null>(null);
-  const [myDeviceId, setMyDeviceId] = useState("");
+  // `myUserId` es el UUID del user en nuestra DB (viene de /v1/me),
+  // el MISMO valor que el backend guarda en `GroupMember.user_id`.
+  // Con él identificamos cuál de los miembros del grupo soy "yo".
+  // Antes usábamos `getDeviceId()` (id local del dispositivo), pero
+  // después del refactor los `deviceId` en FamilyMember guardan
+  // el user_id del backend — y si `getDeviceId()` devolvía vacío,
+  // la comparación fallaba y nadie tenía badge "Tú". Usamos null
+  // hasta cargar para no falsos negativos.
+  const [myUserId, setMyUserId] = useState<string | null>(null);
 
-  const reload = async () => {
+  // `autoSwitchToView`: al abrir el modal por primera vez y si ya hay
+  // un grupo, saltamos directo a la vista del grupo en lugar de
+  // mostrar el menú vacío. Pero tras crear/unirse, queremos que el
+  // usuario vuelva al menú (con el hero "Mantén unida a tu familia")
+  // para que vea el grupo recién creado listado — no al detalle del
+  // grupo, que es confuso justo después de salir del formulario.
+  const reload = async (opts: { autoSwitchToView?: boolean } = {}) => {
     const all = await getAllGroups();
     setGroups(all);
-    setMyDeviceId(await getDeviceId());
-    if (all.length > 0 && mode === "menu") {
+    // Cargamos mi UUID en paralelo. Si falla (sin internet, backend
+    // caído), dejamos null y el badge "Tú" no se pinta — es mejor
+    // que pintarlo en un miembro equivocado.
+    try {
+      const me = await apiMe();
+      setMyUserId(me.id);
+    } catch (e) {
+      console.warn("[FamilyGroupModal] no se pudo cargar /me:", e);
+      setMyUserId(null);
+    }
+    if (opts.autoSwitchToView && all.length > 0 && mode === "menu") {
       setActiveGroup(all[0]);
       setMode("view");
     }
@@ -62,7 +85,7 @@ export default function FamilyGroupModal({ visible, onClose }: Props) {
       setMode("menu");
       return;
     }
-    reload();
+    reload({ autoSwitchToView: true });
   }, [visible]);
 
   return (
@@ -110,6 +133,10 @@ export default function FamilyGroupModal({ visible, onClose }: Props) {
         {mode === "create" && (
           <CreateForm
             onCreated={async () => {
+              // Tras crear (y compartir/"más tarde") volvemos al menú
+              // principal con el hero. Ahí el usuario ve el grupo
+              // listado y puede entrar al detalle tocándolo si quiere.
+              setMode("menu");
               await reload();
             }}
           />
@@ -118,7 +145,22 @@ export default function FamilyGroupModal({ visible, onClose }: Props) {
         {mode === "join" && (
           <JoinForm
             onJoined={async () => {
-              await reload();
+              // Al unirse tiene sentido ir al detalle del grupo — el
+              // usuario quiere ver quién más está ahí.
+              const all = await getAllGroups();
+              setGroups(all);
+              try {
+                const me = await apiMe();
+                setMyUserId(me.id);
+              } catch (e) {
+                console.warn("[FamilyGroupModal] no se pudo cargar /me:", e);
+              }
+              if (all.length > 0) {
+                setActiveGroup(all[0]);
+                setMode("view");
+              } else {
+                setMode("menu");
+              }
             }}
           />
         )}
@@ -126,7 +168,7 @@ export default function FamilyGroupModal({ visible, onClose }: Props) {
         {mode === "view" && activeGroup && (
           <GroupView
             group={activeGroup}
-            myDeviceId={myDeviceId}
+            myUserId={myUserId}
             onLeft={async () => {
               setActiveGroup(null);
               setMode("menu");
@@ -340,12 +382,14 @@ function JoinForm({ onJoined }: { onJoined: () => Promise<void> }) {
 
 function GroupView({
   group,
-  myDeviceId,
+  myUserId,
   onLeft,
   onUpdated,
 }: {
   group: FamilyGroup;
-  myDeviceId: string;
+  // Null mientras carga — durante esa ventana no pintamos badge "Tú"
+  // para no pintarlo equivocadamente en un miembro que no soy yo.
+  myUserId: string | null;
   onLeft: () => Promise<void>;
   onUpdated: () => Promise<void>;
 }) {
@@ -426,7 +470,11 @@ function GroupView({
       {/* Lista de miembros */}
       <Text style={styles.sectionLabel}>Miembros ({group.members.length})</Text>
       {group.members.map((m) => {
-        const isMe = m.deviceId === myDeviceId;
+        // `deviceId` en FamilyMember guarda el user_id del backend
+        // (ver familyGroupsService.memberFromApi). Solo pintamos "Tú"
+        // cuando ya cargamos nuestro UUID — sin él, mejor no pintar
+        // que pintar en la persona equivocada.
+        const isMe = myUserId !== null && m.deviceId === myUserId;
         const statusEmoji =
           m.status === "safe"
             ? "✅"

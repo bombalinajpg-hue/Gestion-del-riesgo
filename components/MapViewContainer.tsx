@@ -19,15 +19,12 @@
  */
 
 import { MaterialIcons } from "@expo/vector-icons";
-import { useDrawerStatus } from "@react-navigation/drawer";
-import { DrawerActions, useNavigation } from "@react-navigation/native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import type { FeatureCollection, Geometry } from "geojson";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  Animated,
   AppState,
   Linking,
   Modal,
@@ -67,6 +64,7 @@ import IsochroneLegend from "./IsochroneLegend";
 import IsochroneOverlay from "./IsochroneOverlay";
 import MapHazardLayers from "./MapHazardLayers";
 import MapTopControls from "./MapTopControls";
+import QuickEvacuateSheet, { type ConfirmPayload } from "./QuickEvacuateSheet";
 import RefugeDetailsModal from "./RefugeDetailsModal";
 import RouteStatusBanners from "./RouteStatusBanners";
 import StreetViewModal from "./StreetViewModal";
@@ -163,7 +161,6 @@ function openInGoogleMaps(sLat: number, sLng: number, eLat: number, eLng: number
 
 export default function MapViewContainer() {
   const mapRef = useRef<MapView>(null);
-  const pulseAnim = useRef(new Animated.Value(1)).current;
 
   // GPS + heading encapsulados en hook; ver src/hooks/useLocationTracking.ts.
   const { location, heading, loading, locationError, retry: retryLocation } = useLocationTracking();
@@ -183,7 +180,6 @@ export default function MapViewContainer() {
   const [puntoConfirmado, setPuntoConfirmado] = useState(false);
   const [mapType, setMapType] = useState<MapType>("hybrid");
   const [showMapTypePicker, setShowMapTypePicker] = useState(false);
-  const [resaltarIniciar, setResaltarIniciar] = useState(false);
 
   const [streetViewVisible, setStreetViewVisible] = useState(false);
   const [refugeDetailsVisible, setRefugeDetailsVisible] = useState(false);
@@ -196,27 +192,33 @@ export default function MapViewContainer() {
   // tras `routeProfile` y `emergencyType` más abajo vía useRouteContext.
   const [showIsochroneOverlay, setShowIsochroneOverlay] = useState(false);
   const [showLugares, setShowLugares] = useState(false);
+  // Toggle nuevo (antes vivía en el drawer como overlay aparte). Ahora
+  // controla si los pins de instituciones se pintan libremente como
+  // capa informativa, a diferencia de `showingInstitucionesOverlay` que
+  // es el modo "el usuario está eligiendo un destino de instituciones".
+  const [showInstituciones, setShowInstituciones] = useState(false);
+  // Sheet "Evacua" local — el mismo QuickEvacuateSheet que usa el Home.
+  // Se abre desde el FAB EVACUA y desde el ☰. Durante una evacuación
+  // activa no se muestra: los parámetros quedan congelados.
+  const [evacuaSheetOpen, setEvacuaSheetOpen] = useState(false);
 
   const { isCalculating, setCalculating, cancelAll } = useRouteCalculationState();
 
   const {
     selectedDestination, setSelectedDestination,
     selectedInstitucion, setSelectedInstitucion,
-    routeProfile,
+    routeProfile, setRouteProfile,
     startMode, setStartMode,
     startPoint, setStartPoint,
     destinationMode, setDestinationMode,
     emergencyType, setEmergencyType,
     shouldCenterOnUser, setShouldCenterOnUser,
-    setShouldScrollToDestinos,
     pickingFromIsochroneMap, setPickingFromIsochroneMap,
     showingInstitucionesOverlay, setShowingInstitucionesOverlay,
     quickRouteMode, setQuickRouteMode,
+    pendingDestKind, setPendingDestKind,
   } = useRouteContext();
 
-  const navigation = useNavigation();
-  const drawerStatus = useDrawerStatus(); // "open" | "closed"
-  const drawerOpen = drawerStatus === "open";
   const insets = useSafeAreaInsets();
   const router = useRouter();
   // `useLocalSearchParams` puede devolver `string | string[]` si una clave
@@ -303,26 +305,6 @@ export default function MapViewContainer() {
   // La sincronización destinoFinal ← selectedDestination/selectedInstitucion
   // vive ahora dentro de useRoutePlanning.
 
-  useEffect(() => {
-    if (!selectedDestination && !selectedInstitucion) return;
-    setResaltarIniciar(true);
-    const anim = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulseAnim, { toValue: 1.06, duration: 400, useNativeDriver: true }),
-        Animated.timing(pulseAnim, { toValue: 1, duration: 400, useNativeDriver: true }),
-      ]),
-      { iterations: 4 },
-    );
-    anim.start(() => setResaltarIniciar(false));
-    return () => {
-      // Si el componente se desmonta o cambia la selección a mitad del
-      // pulso, detenemos la animación y el callback de final — sin esto
-      // Animated mantendría el driver corriendo sobre un valor huérfano.
-      anim.stop();
-      pulseAnim.setValue(1);
-    };
-  }, [selectedDestination, selectedInstitucion, pulseAnim]);
-
   // Poll de alertas/desaparecidos/familia cada 60 s, SOLO con la app en
   // primer plano. Dispara recompute para reclusterizar los reports; los
   // demás consumidores de useCommunityStatus reciben los datos nuevos
@@ -361,11 +343,16 @@ export default function MapViewContainer() {
     const tieneDestino = destinoFinal !== null || destinationMode === "closest";
     if (!tieneDestino) return;
     if (emergencyType === "ninguna") {
+      // Abrimos el sheet de evacuación rápida para que el usuario elija
+      // emergencia (y si quiere, re-confirme origen y destino). Antes
+      // esto llamaba a `DrawerActions.openDrawer()` — pero el drawer
+      // quedó obsoleto tras el refactor del sheet unificado; dispatcharlo
+      // desde acá dejaba al usuario en un estado confuso.
       Alert.alert(
         "Selecciona una emergencia",
-        "Para calcular la ruta, primero elige un tipo de emergencia desde el menú.",
+        "Para calcular la ruta, primero elige el tipo de emergencia.",
         [
-          { text: "Abrir menú", onPress: () => navigation.dispatch(DrawerActions.openDrawer()) },
+          { text: "Elegir emergencia", onPress: () => setEvacuaSheetOpen(true) },
           { text: "Cancelar", style: "cancel" },
         ],
       );
@@ -388,6 +375,46 @@ export default function MapViewContainer() {
     openInGoogleMaps(sLat, sLng, destinoFinal.lat, destinoFinal.lng, routeProfile ?? "foot-walking");
   };
 
+  // Handler para el sheet "Evacua" local — es el mismo flujo que
+  // HomeScreen.handleQuickEvacuate pero sin el `router.push`: ya
+  // estamos en /map. Resetea la ruta previa, setea contexto y deja
+  // que el pipeline (Case A para GPS, CONFIRMAR PUNTO para manual)
+  // dispare el cálculo.
+  const handleLocalEvacuate = (p: ConfirmPayload) => {
+    setEvacuaSheetOpen(false);
+    // Limpia rastros de la evacuación anterior (si la hubo) para no
+    // quedar con una polyline vieja encima de la nueva.
+    cancelAll();
+    resetRouteState();
+    setPuntoConfirmado(false);
+
+    setSelectedDestination(p.shelter ?? null);
+    setSelectedInstitucion(p.institucion ?? null);
+    setEmergencyType(p.emergency);
+    setRouteProfile("foot-walking");
+    setStartPoint(null);
+
+    const hasSpecific = p.shelter || p.institucion;
+    const effectiveKind = hasSpecific ? "closest" : p.destChoice === "locked" ? "closest" : p.destChoice;
+    setPendingDestKind(effectiveKind);
+    setDestinationMode(effectiveKind === "closest" ? (hasSpecific ? "manual" : "closest") : "manual");
+    setPickingFromIsochroneMap(false);
+    setShowingInstitucionesOverlay(false);
+
+    if (p.start === "gps") {
+      setStartMode("gps");
+    } else {
+      setStartMode("manual");
+    }
+    // `armPipeline()` resetea los refs de "un solo disparo" ANTES de
+    // activar el flag. Cubre el edge case en el que `quickRouteMode`
+    // ya estaba en true (evacuación anterior que falló) — sin arm
+    // explícito, los refs marcados de la sesión anterior impedirían
+    // que el pipeline dispare el nuevo cálculo.
+    armPipeline();
+    setQuickRouteMode(true);
+  };
+
   const handleResetAll = () => {
     cancelAll();
     resetRouteState();
@@ -398,10 +425,11 @@ export default function MapViewContainer() {
     setSelectedDestination(null);
     setSelectedInstitucion(null);
     setDestinationMode("closest");
-    setResaltarIniciar(false);
     setShowIsochroneOverlay(false);
     setPickingFromIsochroneMap(false);
     setShowingInstitucionesOverlay(false);
+    setPendingDestKind(null);
+    setQuickRouteMode(false);
   };
 
   const handleResetConfirm = () => {
@@ -432,7 +460,11 @@ export default function MapViewContainer() {
   // local (TDD + fallback), no la de Google.
 
   // Pipeline QUICK ROUTE (desde EmergencyScreen): ver src/hooks/useQuickRoutePipeline.
-  useQuickRoutePipeline({
+  // `armPipeline` rearma los refs de "un solo disparo" — el handler
+  // local `handleLocalEvacuate` lo llama antes de activar el flujo
+  // para garantizar una activación limpia (cubrir el edge case en el
+  // que la evacuación anterior falló y el usuario pidió otra).
+  const { arm: armPipeline } = useQuickRoutePipeline({
     quickRouteMode, setQuickRouteMode,
     autoRouteParam: autoRoute,
     graphReady, location,
@@ -440,6 +472,7 @@ export default function MapViewContainer() {
     destinoFinal, selectedDestination, selectedInstitucion,
     destinationMode,
     pickingFromIsochroneMap, showingInstitucionesOverlay,
+    pendingDestKind, setPendingDestKind,
     setDestinationMode, setPickingFromIsochroneMap,
     setShowingInstitucionesOverlay, setShowIsochroneOverlay,
     setPuntoConfirmado, setStreetViewVisible,
@@ -510,6 +543,27 @@ export default function MapViewContainer() {
     // Comportamiento normal: abrir ficha del refugio
     handleOpenRefugeDetails(dest.nombre);
   };
+
+  // Cuando la ruta se calculó (routeCoords no vacío) encuadramos la
+  // cámara sobre la polyline completa. Esto resuelve el caso común
+  // del usuario probando desde fuera de Santa Rosa: antes el zoom
+  // inicial los dejaba viendo Pereira + alrededores y tenían que
+  // navegar manualmente para ubicarse en la zona de estudio. Con esto
+  // la cámara salta directo a los puntos de la ruta, que es lo único
+  // accionable.
+  useEffect(() => {
+    if (routeCoords.length === 0) return;
+    // Delay breve para que la polyline termine de pintarse antes del
+    // fit — en algunos devices el fitToCoordinates corre antes que
+    // la primera frame del polyline y el padding queda descuadrado.
+    const t = setTimeout(() => {
+      mapRef.current?.fitToCoordinates(routeCoords, {
+        edgePadding: { top: 160, right: 60, bottom: 240, left: 60 },
+        animated: true,
+      });
+    }, 200);
+    return () => clearTimeout(t);
+  }, [routeCoords]);
 
   // initialRegion derivado del bbox del grafo — así el mapa siempre abre
   // enmarcando exactamente la zona cubierta, sin asumir una ciudad fija.
@@ -608,10 +662,15 @@ export default function MapViewContainer() {
   // Botón "Confirmar punto de inicio" — ahora también se muestra en modo
   // GPS (no solo manual) para obligar a una confirmación antes de elegir
   // destino. No aplica en quickRouteMode (Emergency auto-confirma).
+  // En el flujo quickRoute manual, el usuario TAMBIÉN debe pasar por
+  // CONFIRMAR PUNTO: es su señal explícita de "listo, calcula". Por eso
+  // quitamos `!quickRouteMode` del gate. Para GPS en quickRoute seguimos
+  // ocultándolo — el pipeline A confirma automáticamente apenas hay fix.
   const puntoPendiente =
-    !puntoConfirmado && !evacuando && !quickRouteMode && !isCalculating &&
+    !puntoConfirmado && !evacuando && !isCalculating &&
     !pickingFromIsochroneMap && !showingInstitucionesOverlay &&
     emergencyType !== "ninguna" && routeProfile !== null &&
+    !(quickRouteMode && startMode === "gps") &&
     ((startMode === "gps" && location !== null) ||
       (startMode === "manual" && startPoint !== null));
   const iconoModo = routeProfile === "driving-car" ? "🚗" : routeProfile === "cycling-regular" ? "🚴" : "🚶";
@@ -620,22 +679,12 @@ export default function MapViewContainer() {
     selectedInstitucion !== null || startMode === "manual" || rutaSugerida || evacuando ||
     pickingFromIsochroneMap || showingInstitucionesOverlay;
 
-  // Los parámetros están completos cuando el usuario ya picó todo lo que
-  // el motor de ruteo necesita. En modo "closest" basta con que haya
-  // destinationMode y preview; en modo manual hace falta destinoFinal.
-  const parametrosListos =
-    ubicacionLista &&
-    routeProfile !== null &&
-    emergencyType !== "ninguna" &&
-    (destinoFinal !== null || (destinationMode === "closest" && closestPreview !== null));
-
-  // Botón "Calcular ruta de evacuación" — aparece cuando todos los
-  // parámetros están listos Y el drawer está cerrado. Sin el gate del
-  // drawer, al tocar "Confirmar punto de inicio" (que abre el drawer)
-  // el botón aparece por milisegundos antes de que la animación del
-  // drawer lo tape, se ve como un parpadeo.
-  const mostrarBotonIniciar = parametrosListos && !evacuando &&
-    !pickingFromIsochroneMap && !showingInstitucionesOverlay && !drawerOpen;
+  // El botón intermedio "CALCULAR RUTA DE EVACUACIÓN" se eliminó: todos
+  // los flujos actuales (Home Evacúa y Visor Ir aquí) auto-calculan a
+  // través del pipeline o del handler CONFIRMAR PUNTO. El botón
+  // quedaba como artefacto del flujo antiguo con drawer y parpadeaba
+  // por milisegundos entre setPuntoConfirmado(true) y que
+  // isCalculating subiera a true.
 
   // El mapa arranca limpio. Solo se muestran refugios cuando:
   //  - el usuario activó el toggle "Ver lugares" (top-right)
@@ -670,14 +719,19 @@ export default function MapViewContainer() {
         <MaterialIcons name="arrow-back" size={22} color="#073b4c" />
       </TouchableOpacity>
 
-      <TouchableOpacity
-        onPress={() => navigation.dispatch(DrawerActions.openDrawer())}
-        style={styles.menuButton}
-        accessibilityLabel="Abrir menú de emergencia"
-        accessibilityRole="button"
-      >
-        <Text style={{ fontSize: 24 }}>☰</Text>
-      </TouchableOpacity>
+      {/* Botón hamburguesa: abre el sheet "Evacua" (mismo que el FAB
+          inferior). Solo visible cuando NO se está evacuando —
+          durante la ruta activa, los parámetros quedan congelados. */}
+      {!evacuando && (
+        <TouchableOpacity
+          onPress={() => setEvacuaSheetOpen(true)}
+          style={styles.menuButton}
+          accessibilityLabel="Abrir evacuación rápida"
+          accessibilityRole="button"
+        >
+          <Text style={{ fontSize: 24 }}>☰</Text>
+        </TouchableOpacity>
+      )}
 
       {/* La columna izquierda con botones de reports/prep/safety/family/
           missing/instituciones se movió a sus propios módulos desde el
@@ -686,12 +740,7 @@ export default function MapViewContainer() {
 
       <MapTopControls
         heading={heading}
-        showIsochroneOverlay={showIsochroneOverlay}
-        isoComputing={isoComputing}
-        showLugares={showLugares}
         onOpenMapTypePicker={() => setShowMapTypePicker(true)}
-        onToggleIsochrones={handleIsochroneButton}
-        onToggleLugares={() => setShowLugares((v) => !v)}
       />
 
       {mostrarIsocronas && (
@@ -762,11 +811,13 @@ export default function MapViewContainer() {
           );
         })}
 
-        {/* Instituciones: solo cuando el usuario las activa desde el
-            flujo quickRoute, o cuando el usuario activó el toggle "Ver
-            lugares". Si viene de quickRoute la institución se toma como
-            destino; si viene del toggle solo abre la info del marker. */}
-        {(showingInstitucionesOverlay || showLugares) && instituciones.map((inst) => (
+        {/* Instituciones: visibles cuando
+              · el usuario activó "Instituciones" en el settings sheet, o
+              · está en el flujo quickRoute seleccionando institución, o
+              · tiene prendido el legacy "Ver lugares" (ahora = showLugares).
+            Si viene de quickRoute la institución se toma como destino;
+            si viene de un toggle, solo abre la info del marker. */}
+        {(showingInstitucionesOverlay || showLugares || showInstituciones) && instituciones.map((inst) => (
           <Marker
             key={`inst-${inst.id}`}
             coordinate={{ latitude: inst.lat, longitude: inst.lng }}
@@ -821,7 +872,7 @@ export default function MapViewContainer() {
           // (evacuar, confirmar, calcular, picking), se sube a 230.
           {
             bottom:
-              (evacuando || puntoPendiente || mostrarBotonIniciar || seleccionandoPunto)
+              (evacuando || puntoPendiente || isCalculating || seleccionandoPunto)
                 ? 230
                 : 90 + insets.bottom,
           },
@@ -945,8 +996,35 @@ export default function MapViewContainer() {
           style={styles.confirmarPuntoButton}
           onPress={() => {
             setPuntoConfirmado(true);
-            setShouldScrollToDestinos(true);
-            navigation.dispatch(DrawerActions.openDrawer());
+            // En flujo rápido, CONFIRMAR PUNTO es el disparador único:
+            // ramifica según el destino preelegido en la encuesta. Nunca
+            // abre el drawer ni pregunta nada — toda la configuración ya
+            // vino del sheet.
+            if (quickRouteMode) {
+              if (pendingDestKind === "heatmap") {
+                setPickingFromIsochroneMap(true);
+                setShowIsochroneOverlay(true);
+                setPendingDestKind(null);
+                return;
+              }
+              if (pendingDestKind === "instituciones") {
+                setShowingInstitucionesOverlay(true);
+                setPendingDestKind(null);
+                return;
+              }
+              // closest o null → auto-calc inmediato al refugio más cercano
+              setCalculating(() => calcularRuta(true));
+              setQuickRouteMode(false);
+              setPendingDestKind(null);
+              return;
+            }
+            // Flujo clásico (sin quickRoute): al confirmar abrimos el
+            // sheet "Evacua" local para que el usuario termine de
+            // elegir emergencia/destino. Antes se abría el drawer
+            // lateral. En la práctica ya no se llega a este branch
+            // porque el flujo principal siempre entra a /map con
+            // quickRouteMode=true, pero lo dejamos como fallback.
+            setEvacuaSheetOpen(true);
           }}
           accessibilityLabel="Confirmar punto de inicio"
           accessibilityRole="button"
@@ -956,62 +1034,38 @@ export default function MapViewContainer() {
         </TouchableOpacity>
       )}
 
-      {/* FAB de configuración — abre el drawer de parámetros. Color teal
-          y ícono `tune` (perillas) para diferenciarlo de la acción de
-          evacuación real, que es el botón azul "CALCULAR RUTA" abajo.
-          Rojo quedaba para la acción panic del Home; acá el verdadero
-          disparador de ruta no es este botón sino el siguiente. */}
-      {/* CONFIGURAR solo cuando el mapa está "limpio": nada en curso. Si
-          el usuario está eligiendo punto manual, tiene punto pendiente
-          de confirmar, viene de quickRoute, o calcula/evacúa/pickea,
-          este FAB estorba y lo ocultamos. */}
-      {!mostrarBotonIniciar && !evacuando && !pickingFromIsochroneMap &&
+      {/* FAB "EVACUA" — abre el QuickEvacuateSheet local, el mismo
+          componente del Home. Solo aparece cuando NO hay evacuación en
+          curso ni otro flujo bloqueando. Antes existía un FAB
+          "AJUSTES" con un sheet diferente (MapSettingsSheet) para
+          toggles de capas y parámetros, pero el usuario pidió
+          unificar: en el mapa, el único flujo relevante es "preparar
+          una nueva evacuación" y el sheet rápido lo cubre todo. */}
+      {!evacuando && !pickingFromIsochroneMap &&
        !showingInstitucionesOverlay && !seleccionandoPunto && !puntoPendiente &&
        !quickRouteMode && !isCalculating && (
         <TouchableOpacity
-          style={styles.configurarRutaFab}
-          onPress={() => navigation.dispatch(DrawerActions.openDrawer())}
+          style={styles.evacuaFab}
+          onPress={() => setEvacuaSheetOpen(true)}
           activeOpacity={0.85}
-          accessibilityLabel="Configurar parámetros de la ruta de evacuación"
+          accessibilityLabel="Evacuación rápida"
           accessibilityRole="button"
-          accessibilityHint="Abre el menú para elegir tipo de emergencia, perfil y punto de partida"
+          accessibilityHint="Abre el panel para elegir emergencia, origen y destino"
         >
-          <MaterialIcons name="tune" size={22} color="#fff" />
-          <Text style={styles.configurarRutaFabText}>CONFIGURAR</Text>
+          <MaterialIcons name="directions-run" size={22} color="#fff" />
+          <Text style={styles.evacuaFabText}>EVACUA</Text>
         </TouchableOpacity>
       )}
 
-      {/* BOTÓN "CALCULAR RUTA DE EVACUACIÓN" — cuando todos los parámetros
-          están listos (destinoFinal o closest+preview). */}
-      {mostrarBotonIniciar && (
-        <Animated.View
-          style={{
-            transform: [{ scale: resaltarIniciar ? pulseAnim : 1 }],
-            position: "absolute", bottom: 170, alignSelf: "center",
-          }}
-        >
-          <TouchableOpacity
-            style={[
-              styles.evacuarButton,
-              resaltarIniciar && styles.evacuarButtonResaltado,
-              isCalculating && { opacity: 0.7 },
-            ]}
-            onPress={handleIrAqui}
-            disabled={isCalculating}
-            accessibilityLabel={isCalculating ? "Calculando ruta" : "Calcular ruta de evacuación"}
-            accessibilityRole="button"
-            accessibilityState={{ disabled: isCalculating, busy: isCalculating }}
-          >
-            {isCalculating ? (
-              <ActivityIndicator size="small" color="#fff" style={{ marginRight: 8 }} />
-            ) : (
-              <MaterialIcons name="directions-run" size={22} color="#ffffff" style={{ marginRight: 8 }} />
-            )}
-            <Text style={styles.evacuarButtonText}>
-              {isCalculating ? "CALCULANDO..." : "CALCULAR RUTA DE EVACUACIÓN"}
-            </Text>
-          </TouchableOpacity>
-        </Animated.View>
+      {/* Indicador mientras se está calculando la ruta. Aparece en el
+          mismo lugar donde vivía el antiguo botón "CALCULAR RUTA" — da
+          feedback de que el cálculo está en curso tras CONFIRMAR PUNTO
+          o auto-calc, sin exponer un botón redundante. */}
+      {isCalculating && !evacuando && (
+        <View style={styles.calculandoPill} pointerEvents="none">
+          <ActivityIndicator size="small" color="#fff" style={{ marginRight: 8 }} />
+          <Text style={styles.calculandoText}>CALCULANDO RUTA...</Text>
+        </View>
       )}
 
       {evacuando && (
@@ -1024,6 +1078,18 @@ export default function MapViewContainer() {
           <Text style={styles.cancelarButtonText}>✕ CANCELAR EVACUACIÓN</Text>
         </TouchableOpacity>
       )}
+
+      {/* Sheet "Evacua" local — mismo componente que usa HomeScreen.
+          Se abre desde el FAB EVACUA o desde el botón ☰ del mapa. El
+          handler `handleLocalEvacuate` replica el flujo de Home pero
+          sin `router.push` (ya estamos en /map). */}
+      <QuickEvacuateSheet
+        visible={evacuaSheetOpen}
+        onClose={() => setEvacuaSheetOpen(false)}
+        onConfirm={handleLocalEvacuate}
+        puntosEncuentro={puntosEncuentro}
+        instituciones={instituciones}
+      />
 
     </View>
   );
@@ -1081,21 +1147,6 @@ const styles = StyleSheet.create({
     backgroundColor: "#ffffffee", padding: 10, borderRadius: 10,
     shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4, elevation: 5,
   },
-  leftActionColumn: { position: "absolute", left: 20, top: 180, zIndex: 10, gap: 8 },
-  squareActionBtn: {
-    width: 46, height: 46, borderRadius: 10,
-    justifyContent: "center", alignItems: "center",
-    shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 4, elevation: 5,
-  },
-  miniBadge: {
-    position: "absolute", top: -4, right: -4,
-    minWidth: 18, height: 18, borderRadius: 9,
-    backgroundColor: "#fbbf24",
-    justifyContent: "center", alignItems: "center",
-    paddingHorizontal: 4,
-    borderWidth: 2, borderColor: "#fff",
-  },
-  miniBadgeText: { color: "#78350f", fontSize: 10, fontWeight: "800" },
   // Botones secundarios del mapa (centrar / reset) se suben para dejar
   // bottom-right al 123 — misma posición que en HomeScreen para que el
   // usuario no tenga que aprender dos layouts distintos.
@@ -1127,10 +1178,12 @@ const styles = StyleSheet.create({
     elevation: 10,
   },
   emergencyButtonText: { color: "#fff", fontWeight: "800", fontSize: 16 },
-  // FAB "Configurar" — teal `#0f766e` para comunicar "acción secundaria,
-  // tranquila, de configuración". El rojo queda reservado para acciones
-  // de pánico (Home CTA "Evacua" + 123). Pill bottom-center.
-  configurarRutaFab: {
+  // FAB "EVACUA" — mismo rojo `#dc2626` que el CTA "Evacua" del Home,
+  // para mantener consistencia visual: donde aparezca este color, el
+  // usuario sabe que es el disparador de una evacuación. Antes acá
+  // había un FAB teal "CONFIGURAR"/"AJUSTES" que abría otro sheet;
+  // ahora el sheet unificado es el QuickEvacuateSheet.
+  evacuaFab: {
     position: "absolute",
     bottom: 170,
     alignSelf: "center",
@@ -1138,42 +1191,18 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    backgroundColor: "#0f766e",
+    backgroundColor: "#dc2626",
     paddingHorizontal: 22,
     paddingVertical: 14,
     borderRadius: 30,
-    shadowColor: "#0f766e",
+    shadowColor: "#dc2626",
     shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.35,
+    shadowOpacity: 0.45,
     shadowRadius: 12,
     elevation: 10,
   },
-  configurarRutaFabText: { color: "#fff", fontWeight: "800", fontSize: 16, letterSpacing: 0.5 },
-  isochroneInfoBanner: {
-    backgroundColor: "rgba(255,255,255,0.95)",
-    paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12,
-    elevation: 5, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15, shadowRadius: 4,
-    alignItems: "center", maxWidth: "70%",
-  },
-  isochroneInfoTitle: { color: "#374151", fontSize: 11, fontWeight: "600" },
-  isochroneInfoTime: { color: "#10b981", fontSize: 20, fontWeight: "800", marginTop: 2 },
-  isochroneInfoDest: { color: "#6b7280", fontSize: 11, marginTop: 2, maxWidth: 200 },
+  evacuaFabText: { color: "#fff", fontWeight: "800", fontSize: 16, letterSpacing: 0.5 },
   legendPosition: { position: "absolute", right: 20, top: 420, zIndex: 10 },
-  missingMarker: {
-    backgroundColor: "#fbbf24", borderRadius: 18,
-    width: 36, height: 36,
-    justifyContent: "center", alignItems: "center",
-    borderWidth: 3, borderColor: "#fff",
-    shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3,
-  },
-  familyMarker: {
-    backgroundColor: "#7c3aed", borderRadius: 18,
-    width: 36, height: 36,
-    justifyContent: "center", alignItems: "center",
-    borderWidth: 3, borderColor: "#fff",
-    shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3,
-  },
-  familyMarkerText: { color: "#fff", fontWeight: "800", fontSize: 14 },
   floatingBanner: {
     position: "absolute", bottom: 170, alignSelf: "center",
     backgroundColor: "#ffffffee", paddingHorizontal: 20, paddingVertical: 12, borderRadius: 20, elevation: 5,
@@ -1185,13 +1214,26 @@ const styles = StyleSheet.create({
     flexDirection: "row", alignItems: "center", elevation: 8,
   },
   confirmarPuntoButtonText: { color: "#ffffff", fontWeight: "bold", fontSize: 15 },
-  evacuarButton: {
-    backgroundColor: "#ef476f", paddingVertical: 16, paddingHorizontal: 28, borderRadius: 30,
-    flexDirection: "row", alignItems: "center", elevation: 8,
-    shadowColor: "#ef476f", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.5, shadowRadius: 8,
+  // Pill de feedback "CALCULANDO RUTA..." — reemplaza al antiguo botón
+  // CALCULAR RUTA (que parpadeaba por milisegundos entre setPuntoConfirmado
+  // y isCalculating=true). Es no-interactivo, solo informativo.
+  calculandoPill: {
+    position: "absolute",
+    bottom: 170,
+    alignSelf: "center",
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#118ab2",
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    borderRadius: 30,
+    elevation: 8,
+    shadowColor: "#118ab2",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 8,
   },
-  evacuarButtonResaltado: { shadowOpacity: 0.9, shadowRadius: 16, elevation: 16 },
-  evacuarButtonText: { color: "#ffffff", fontWeight: "bold", fontSize: 16, letterSpacing: 1 },
+  calculandoText: { color: "#ffffff", fontWeight: "bold", fontSize: 14, letterSpacing: 1 },
   cancelarButton: {
     position: "absolute", bottom: 170, alignSelf: "center",
     backgroundColor: "#073b4c", paddingVertical: 16, paddingHorizontal: 32, borderRadius: 30, elevation: 8,

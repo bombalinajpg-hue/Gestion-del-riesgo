@@ -128,7 +128,14 @@ class MissingOut(BaseModel):
 
 class GroupIn(BaseModel):
     name: str = Field(..., max_length=200)
+    my_name: str = Field(..., max_length=200)
     municipio_id: UUID | None = None
+
+
+class GroupJoinIn(BaseModel):
+    """Unirse a un grupo existente por código."""
+    code: str = Field(..., min_length=4, max_length=8)
+    my_name: str = Field(..., max_length=200)
 
 
 class GroupOut(BaseModel):
@@ -138,10 +145,14 @@ class GroupOut(BaseModel):
     name: str
     municipio_id: UUID | None
     created_at: datetime
+    is_owner: bool = False
+    my_name: str | None = None
 
 
 class MemberLocationUpdate(BaseModel):
-    location: LatLng
+    """Actualiza mi estado + (opcionalmente) mi ubicación. Si no hay
+    ubicación aún (GPS denegado), el status igual se actualiza."""
+    location: LatLng | None = None
     status: MemberStatus = MemberStatus.safe
 
 
@@ -153,6 +164,12 @@ class MemberOut(BaseModel):
     last_location: LatLng | None
     last_status: MemberStatus
     last_seen_at: datetime | None
+
+
+class GroupDetail(GroupOut):
+    """Detalle de grupo con la lista de miembros — lo que el modal del
+    frontend pinta al abrir un grupo."""
+    members: list[MemberOut]
 
 
 # ─── Infraestructura ──────────────────────────────────────────────

@@ -1,28 +1,34 @@
 /**
- * Hook que maneja el pipeline "quick route" disparado desde EmergencyScreen.
+ * Hook que maneja el pipeline "quick route" disparado desde HomeScreen
+ * (y, por compat, desde cualquier caller que active `quickRouteMode`).
  *
- * Tres casos disjuntos, cada uno con un ref de un solo disparo para que el
- * Alert/cálculo no se re-dispare al re-renderizar:
+ * Versión v4.5 — las TRES preguntas (emergencia, origen, destino) ya se
+ * resolvieron en `QuickEvacuateSheet` antes de llegar al mapa. Acá ya
+ * no hay Alerts: el flujo es determinístico según `pendingDestKind`.
  *
- *  A. Desde mi ubicación (autoRoute=1 + startMode=gps + destinationMode=closest):
- *     en cuanto location+graphReady están listos y la emergencia elegida,
- *     dispara calcularRuta(true) y sale del modo.
+ * Dos efectos disjuntos, cada uno con su ref de un solo disparo para
+ * que no se re-ejecuten al re-renderizar:
  *
- *  B. Elegir en el mapa (startMode=manual, tras tocar el mapa): auto-confirma
- *     puntoConfirmado y abre un Alert con los 3 métodos de destino (cercano /
- *     heatmap / instituciones).
+ *  A. GPS (autoRoute=1 + startMode=gps): apenas hay location+graphReady:
+ *     - pendingDestKind = "closest"  → dispara calcularRuta(true)
+ *     - pendingDestKind = "heatmap"  → activa iso overlay + picking
+ *     - pendingDestKind = "instituciones" → activa overlay instituciones
  *
- *  C. Destino elegido en quickRouteMode (por cualquier vía): abre un Alert
- *     con acciones (Iniciar / Google Maps / Vista 360°).
+ *     Para los dos últimos el usuario debe tocar el destino en el mapa,
+ *     lo que aterriza en Case C.
  *
- * Cancelar en cualquier Alert debe SIEMPRE salir de quickRouteMode (sin esto
- * el flag se pegaba y bloqueaba flujos posteriores).
+ *  C. Destino elegido en quickRouteMode (vía picker o auto-selección):
+ *     dispara calcularRuta(true) inmediato — sin Alert intermedio.
+ *
+ * Nota: Case B (pickeo manual del origen) desapareció. La confirmación
+ * del punto de inicio y el branching por destino viven en
+ * MapViewContainer, en el onPress del botón CONFIRMAR PUNTO.
  */
 
 import { useEffect, useRef } from "react";
-import { Alert } from "react-native";
 import type { DestinoFinal, Destino, Institucion, StartMode } from "../types/types";
 import type { EmergencyType } from "../types/graph";
+import type { PendingDestKind } from "../../context/RouteContext";
 
 type DestinationMode = "closest" | "manual";
 
@@ -42,6 +48,8 @@ export interface UseQuickRoutePipelineParams {
   destinationMode: DestinationMode;
   pickingFromIsochroneMap: boolean;
   showingInstitucionesOverlay: boolean;
+  pendingDestKind: PendingDestKind;
+  setPendingDestKind: (v: PendingDestKind) => void;
   setDestinationMode: (m: DestinationMode) => void;
   setPickingFromIsochroneMap: (v: boolean) => void;
   setShowingInstitucionesOverlay: (v: boolean) => void;
@@ -57,30 +65,46 @@ export function useQuickRoutePipeline(params: UseQuickRoutePipelineParams) {
   const {
     quickRouteMode, setQuickRouteMode,
     autoRouteParam, graphReady, location,
-    startMode, startPoint, emergencyType, evacuando,
+    startMode, emergencyType, evacuando,
     destinoFinal, selectedDestination, selectedInstitucion,
-    destinationMode,
     pickingFromIsochroneMap, showingInstitucionesOverlay,
-    setDestinationMode, setPickingFromIsochroneMap,
+    pendingDestKind, setPendingDestKind,
+    setPickingFromIsochroneMap,
     setShowingInstitucionesOverlay, setShowIsochroneOverlay,
-    setPuntoConfirmado, setStreetViewVisible,
-    calcularRuta, setCalculating, openGoogleMaps,
+    setPuntoConfirmado,
+    calcularRuta, setCalculating,
   } = params;
 
   const autoRouteFiredRef = useRef(false);
-  const destMethodAskedRef = useRef(false);
-  const actionAskedRef = useRef(false);
+  const actionFiredRef = useRef(false);
+  // Dos formas de rearmar los refs de "un solo disparo":
+  //   1. Transición OFF→ON de `quickRouteMode` — el caso normal.
+  //   2. La función `arm()` devuelta abajo — la llaman los handlers
+  //      que activan el flujo (Home.handleQuickEvacuate y
+  //      MapView.handleLocalEvacuate) para cubrir el edge case en el
+  //      que `quickRouteMode` ya está true pero el usuario pidió otra
+  //      evacuación (por ejemplo, tras un error en la primera). Sin
+  //      esto, los refs quedan marcados y el pipeline no vuelve a
+  //      disparar.
+  const prevQRMRef = useRef(false);
+  useEffect(() => {
+    if (!prevQRMRef.current && quickRouteMode) {
+      autoRouteFiredRef.current = false;
+      actionFiredRef.current = false;
+    }
+    prevQRMRef.current = quickRouteMode;
+  }, [quickRouteMode]);
 
-  // Refs para inputs que las closures del Alert leen — así evitamos que el
-  // Alert capture valores viejos de `calcularRuta` / `openGoogleMaps` (que
-  // se re-crean cada render).
-  const handlersRef = useRef({ calcularRuta, setCalculating, openGoogleMaps });
-  handlersRef.current = { calcularRuta, setCalculating, openGoogleMaps };
+  // Refs para que el closure no capture calcularRuta viejo. Los handlers
+  // se recrean cada render cuando sus inputs cambian; sin este truco el
+  // efecto dispararía con una versión stale.
+  const handlersRef = useRef({ calcularRuta, setCalculating });
+  handlersRef.current = { calcularRuta, setCalculating };
 
-  // Caso A — autoRoute desde GPS. Permite `emergencyType === "ninguna"`
-  // para el flujo panic (aún no lanzado desde acá, pero por consistencia
-  // con Case B y para no sorprender si HomeScreen agrega un path GPS sin
-  // elegir emergencia).
+  // Case A — GPS + autoRoute=1: el punto de inicio se toma del fix del
+  // GPS sin pedir confirmación. El branching por destino se hace acá
+  // porque no hay botón CONFIRMAR PUNTO intermedio (ese solo aparece
+  // en modo manual).
   useEffect(() => {
     if (autoRouteFiredRef.current) return;
     if (!quickRouteMode) return;
@@ -89,135 +113,75 @@ export function useQuickRoutePipeline(params: UseQuickRoutePipelineParams) {
     if (startMode !== "gps") return;
     if (evacuando) return;
     autoRouteFiredRef.current = true;
+    setPuntoConfirmado(true);
+
+    if (pendingDestKind === "heatmap") {
+      setPickingFromIsochroneMap(true);
+      setShowIsochroneOverlay(true);
+      setPendingDestKind(null);
+      // quickRouteMode se conserva: lo apagaremos en Case C cuando
+      // el usuario elija destino y dispare el cálculo.
+      return;
+    }
+    if (pendingDestKind === "instituciones") {
+      setShowingInstitucionesOverlay(true);
+      setPendingDestKind(null);
+      return;
+    }
+
+    // Default (closest o null): auto-calc inmediato. Pequeño delay para
+    // dejar que el mapa termine su primer frame; sin esto, la ruta se
+    // pinta antes de que la cámara termine de centrar al usuario.
     const t = setTimeout(() => {
       const h = handlersRef.current;
       h.setCalculating(() => h.calcularRuta(true));
       setQuickRouteMode(false);
+      setPendingDestKind(null);
     }, 350);
     return () => clearTimeout(t);
     // setQuickRouteMode es estable (viene de setState del context); los
     // handlers van por ref. El resto son las dependencias reales.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [quickRouteMode, autoRouteParam, graphReady, location, startMode, emergencyType, evacuando]);
+  }, [quickRouteMode, autoRouteParam, graphReady, location, startMode, emergencyType, evacuando, pendingDestKind]);
 
-  // Caso B — pickeo manual: auto-confirma el punto de inicio y:
-  //   · Si el caller ya fijó `destinationMode === "closest"` (flujo panic
-  //     desde el FAB EVACUAR del Home), calcula inmediato sin preguntar
-  //     método de destino — "más cercano" ya fue la elección implícita.
-  //   · Si `destinationMode === "manual"` (flujo clásico desde
-  //     EmergencyScreen), muestra el Alert con los 3 métodos para que
-  //     el usuario decida.
+  // Case C — destino elegido dentro de quickRouteMode: auto-calc.
+  // Reemplaza el Alert "¿qué quieres hacer?" anterior porque en el nuevo
+  // flujo la acción es siempre "iniciar ruta" — las demás (Google Maps,
+  // 360°) ya están accesibles como botones flotantes junto al destino.
   //
-  // `emergencyType === "ninguna"` ya no bloquea: el nuevo flujo panic
-  // permite disparar sin amenaza (ruta más corta sin penalización).
+  // Requiere graphReady+location porque calcularRuta retorna early sin
+  // ellos — y si dejamos que el ref de un solo disparo se marque antes
+  // de que el cálculo sea posible, el flujo queda bloqueado.
   useEffect(() => {
-    if (destMethodAskedRef.current) return;
-    if (!quickRouteMode) return;
-    if (startMode !== "manual") return;
-    if (!startPoint) return;
-    destMethodAskedRef.current = true;
-    setPuntoConfirmado(true);
-
-    if (destinationMode === "closest") {
-      // Sin delay: el delay existía para dejar terminar la animación del
-      // Alert de método, pero este branch no abre Alert — va directo a
-      // calcular. Cualquier delay aquí produce un parpadeo donde
-      // CONFIRMAR PUNTO o CALCULAR RUTA asoman un instante.
-      const h = handlersRef.current;
-      h.setCalculating(() => h.calcularRuta(true));
-      setQuickRouteMode(false);
-      return;
-    }
-
-    const t = setTimeout(() => {
-      Alert.alert(
-        "¿Cómo eliges el destino?",
-        "Selecciona el método para llegar al lugar seguro.",
-        [
-          {
-            text: "🏁 Punto más cercano",
-            onPress: () => {
-              const h = handlersRef.current;
-              setDestinationMode("closest");
-              h.setCalculating(() => h.calcularRuta(true));
-              setQuickRouteMode(false);
-            },
-          },
-          {
-            text: "🔥 Mapa de calor",
-            onPress: () => {
-              setDestinationMode("manual");
-              setPickingFromIsochroneMap(true);
-              setShowIsochroneOverlay(true);
-            },
-          },
-          {
-            text: "🏥 Instituciones",
-            onPress: () => {
-              setDestinationMode("manual");
-              setShowingInstitucionesOverlay(true);
-            },
-          },
-          {
-            text: "Cancelar",
-            style: "cancel",
-            onPress: () => setQuickRouteMode(false),
-          },
-        ],
-      );
-    }, 280);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [quickRouteMode, startMode, startPoint, emergencyType, destinationMode]);
-
-  // Caso C — destino elegido: ofrece acciones
-  useEffect(() => {
-    if (actionAskedRef.current) return;
+    if (actionFiredRef.current) return;
     if (!quickRouteMode) return;
     if (!destinoFinal) return;
     if (evacuando) return;
+    if (!graphReady || !location) return;
     if (!pickingFromIsochroneMap && !showingInstitucionesOverlay &&
         !selectedDestination && !selectedInstitucion) return;
-    actionAskedRef.current = true;
+    actionFiredRef.current = true;
     const t = setTimeout(() => {
-      Alert.alert(
-        `→ ${destinoFinal.nombre}`,
-        "¿Qué quieres hacer?",
-        [
-          {
-            text: "🏃 Iniciar ruta de evacuación",
-            onPress: () => {
-              const h = handlersRef.current;
-              h.setCalculating(() => h.calcularRuta(true));
-              setQuickRouteMode(false);
-            },
-          },
-          {
-            text: "🗺️ Calcular con Google Maps",
-            onPress: () => {
-              handlersRef.current.openGoogleMaps();
-              setQuickRouteMode(false);
-            },
-          },
-          {
-            text: "📷 Vista 360°",
-            onPress: () => {
-              setStreetViewVisible(true);
-              setQuickRouteMode(false);
-            },
-          },
-          {
-            text: "Cancelar",
-            style: "cancel",
-            // Sin este onPress el flag `quickRouteMode` se queda true y
-            // bloquea silenciosamente "Confirmar punto de inicio" en
-            // flujos posteriores.
-            onPress: () => setQuickRouteMode(false),
-          },
-        ],
-      );
+      const h = handlersRef.current;
+      h.setCalculating(() => h.calcularRuta(true));
+      setQuickRouteMode(false);
+      setPendingDestKind(null);
     }, 200);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [quickRouteMode, destinoFinal, evacuando, selectedDestination, selectedInstitucion]);
+  }, [quickRouteMode, destinoFinal, evacuando, graphReady, location, selectedDestination, selectedInstitucion]);
+
+  /** Rearma explícitamente los refs de "un solo disparo". Los handlers
+   *  que activan el flujo rápido deben llamarlo ANTES de
+   *  `setQuickRouteMode(true)` para garantizar una activación limpia,
+   *  incluso si el flag ya estaba en true por un intento anterior
+   *  (caso típico: la primera evacuación falló y el usuario pide
+   *  otra sin pasar por un reset intermedio).
+   */
+  const arm = () => {
+    autoRouteFiredRef.current = false;
+    actionFiredRef.current = false;
+  };
+
+  return { arm };
 }

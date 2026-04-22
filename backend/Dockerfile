@@ -24,8 +24,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # de docker-compose; en prod es lo que queda empaquetado.
 COPY . .
 
+# Railway / Fly / Render asignan el puerto por variable de entorno
+# `$PORT`. El script `start.sh` corre migrations antes de levantar el
+# server — así un deploy con schema nuevo llega con DB al día sin que
+# tengamos que correr alembic manualmente.
 EXPOSE 8000
-
-# Default: uvicorn en modo producción (sin --reload). En dev el
-# docker-compose override lo cambia a --reload.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+RUN chmod +x /app/start.sh
+CMD ["/app/start.sh"]

@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routers import alerts, health, me, municipios, reports
+from app.routers import alerts, family_groups, health, me, municipios, reports
 
 logging.basicConfig(
     level=settings.log_level.upper(),
@@ -67,6 +67,7 @@ app.include_router(me.router, prefix="/v1")
 app.include_router(municipios.router, prefix="/v1")
 app.include_router(reports.router, prefix="/v1")
 app.include_router(alerts.router, prefix="/v1")
+app.include_router(family_groups.router, prefix="/v1")
 
 
 @app.get("/", tags=["root"])

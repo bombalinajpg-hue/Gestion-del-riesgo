@@ -103,3 +103,9 @@ export function useMunicipio(): UseMunicipioResult {
 export function getActiveMunicipioId(): string | null {
   return cache.municipio?.id ?? null;
 }
+
+/** Municipio completo cacheado (útil para `bbox`). Null si aún no se
+ * resolvió. */
+export function getActiveMunicipio(): ApiMunicipio | null {
+  return cache.municipio;
+}

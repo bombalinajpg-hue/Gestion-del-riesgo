@@ -7,7 +7,10 @@
 
 import { MaterialIcons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
+import { useState } from "react";
 import {
+  ActivityIndicator,
+  Alert,
   ScrollView,
   StyleSheet,
   Text,
@@ -15,6 +18,8 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+
+import { useAuth } from "../context/AuthContext";
 
 // Nombre válido del set MaterialIcons — garantiza que un typo en la
 // cadena "icon" explote en TS y no en runtime (ícono fantasma).
@@ -111,6 +116,33 @@ const MANUAL: { step: string; text: string }[] = [
 
 export default function AboutScreen() {
   const router = useRouter();
+  const { user, signOut } = useAuth();
+  const [signingOut, setSigningOut] = useState(false);
+
+  const handleLogout = () => {
+    Alert.alert(
+      "Cerrar sesión",
+      "¿Seguro que quieres cerrar sesión? Tendrás que volver a ingresar tu correo y contraseña.",
+      [
+        { text: "Cancelar", style: "cancel" },
+        {
+          text: "Cerrar sesión",
+          style: "destructive",
+          onPress: async () => {
+            setSigningOut(true);
+            try {
+              await signOut();
+              // AuthGate redirige automáticamente a /login al ver user=null.
+            } catch (e) {
+              console.warn("[About] signOut:", e);
+              Alert.alert("Error", "No se pudo cerrar sesión. Intenta de nuevo.");
+              setSigningOut(false);
+            }
+          },
+        },
+      ],
+    );
+  };
 
   return (
     <SafeAreaView style={styles.root} edges={["top", "bottom"]}>
@@ -176,6 +208,41 @@ export default function AboutScreen() {
             Recomendaciones de preparación basadas en UNGRD y Defensa Civil
             Colombiana.
           </Text>
+        </View>
+
+        {/* Cuenta + logout. Al final del About porque no es una acción
+            frecuente: el usuario viene acá buscando info de la app y
+            de paso puede salir si lo necesita. Un logout flotante en
+            Home añadiría ruido a un flujo de emergencia donde lo
+            último que el usuario quiere es tocar por error "cerrar
+            sesión". */}
+        <Text style={styles.sectionLabel}>Mi cuenta</Text>
+        <View style={styles.accountCard}>
+          <View style={styles.accountRow}>
+            <MaterialIcons name="person" size={22} color="#475569" />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.accountLabel}>Sesión iniciada</Text>
+              <Text style={styles.accountValue} numberOfLines={1}>
+                {user?.email ?? user?.displayName ?? "Usuario"}
+              </Text>
+            </View>
+          </View>
+          <TouchableOpacity
+            style={[styles.logoutBtn, signingOut && { opacity: 0.6 }]}
+            onPress={handleLogout}
+            disabled={signingOut}
+            accessibilityRole="button"
+            accessibilityLabel="Cerrar sesión"
+          >
+            {signingOut ? (
+              <ActivityIndicator size="small" color="#dc2626" />
+            ) : (
+              <MaterialIcons name="logout" size={18} color="#dc2626" />
+            )}
+            <Text style={styles.logoutText}>
+              {signingOut ? "Cerrando…" : "Cerrar sesión"}
+            </Text>
+          </TouchableOpacity>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -313,4 +380,48 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   creditsBody: { fontSize: 11, color: "#64748b", lineHeight: 16 },
+  accountCard: {
+    backgroundColor: "#fff",
+    borderRadius: 14,
+    padding: 14,
+    marginHorizontal: 16,
+    marginBottom: 24,
+    gap: 12,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+  },
+  accountRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  accountLabel: {
+    fontSize: 11,
+    color: "#94a3b8",
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  accountValue: {
+    fontSize: 14,
+    color: "#0f172a",
+    fontWeight: "700",
+    marginTop: 2,
+  },
+  logoutBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 12,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: "#fecaca",
+    backgroundColor: "#fef2f2",
+  },
+  logoutText: {
+    color: "#dc2626",
+    fontSize: 14,
+    fontWeight: "700",
+  },
 });

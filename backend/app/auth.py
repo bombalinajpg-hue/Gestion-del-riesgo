@@ -36,17 +36,41 @@ _firebase_app: firebase_admin.App | None = None
 
 
 def _init_firebase() -> firebase_admin.App:
-    """Inicializa el SDK de Firebase Admin (idempotente)."""
+    """Inicializa el SDK de Firebase Admin (idempotente).
+
+    Dos fuentes posibles para el service-account:
+      1. `FIREBASE_CREDENTIALS_JSON` (env): JSON inline. Modo de
+         producción en hosts como Railway/Fly/Render que no aceptan
+         archivos montados.
+      2. `FIREBASE_CREDENTIALS_PATH` (env, default `./firebase-credentials.json`):
+         ruta a un archivo. Modo de dev local.
+    """
     global _firebase_app
     if _firebase_app is not None:
         return _firebase_app
 
+    # 1) JSON inline (prod)
+    if settings.firebase_credentials_json:
+        import json
+        try:
+            cred_dict = json.loads(settings.firebase_credentials_json)
+            cred = credentials.Certificate(cred_dict)
+            _firebase_app = firebase_admin.initialize_app(cred)
+            log.info("Firebase Admin inicializado desde FIREBASE_CREDENTIALS_JSON")
+            return _firebase_app
+        except Exception as e:
+            log.error(
+                "FIREBASE_CREDENTIALS_JSON inválido: %s — revisa que el JSON "
+                "esté bien escapado. Auth deshabilitado.", e,
+            )
+            return None  # type: ignore[return-value]
+
+    # 2) Archivo en disco (dev local)
     cred_path = Path(settings.firebase_credentials_path)
     if not cred_path.exists():
-        # En dev sin Firebase configurado dejamos la app arrancar pero
-        # los endpoints protegidos van a fallar con 503. Esto permite
-        # desarrollar endpoints públicos (health, municipios) sin tener
-        # credentials todavía.
+        # Sin credenciales los endpoints protegidos responden 503.
+        # Esto permite desarrollar endpoints públicos (health,
+        # municipios, alerts) sin configurar Firebase todavía.
         log.warning(
             "Firebase credentials no encontradas en %s — auth deshabilitado",
             cred_path,
@@ -55,7 +79,7 @@ def _init_firebase() -> firebase_admin.App:
 
     cred = credentials.Certificate(str(cred_path))
     _firebase_app = firebase_admin.initialize_app(cred)
-    log.info("Firebase Admin inicializado")
+    log.info("Firebase Admin inicializado desde archivo %s", cred_path)
     return _firebase_app
 
 

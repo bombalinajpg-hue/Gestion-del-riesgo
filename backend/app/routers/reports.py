@@ -1,33 +1,46 @@
 """
 Endpoints de reportes ciudadanos.
 
-Flujo simplificado (el clustering a alertas corre aparte, ver
-`services/clustering.py` cuando lo implementemos como cron):
+  POST /reports         crea un reporte (requiere auth) + dispara
+                        reclustering en background.
+  GET  /reports/near    lista reportes crudos cerca de un punto.
 
-  POST /reports         crea un reporte (requiere auth)
-  GET  /reports/near    lista reportes crudos cerca de un punto
-
-Los públicos ven `/alerts/near` (clusters), que es el endpoint
-que realmente consume el mapa del Visor. Los reports crudos quedan
-para auditoría / dashboard staff.
+Los públicos ven `/alerts/near` (clusters), que es el endpoint que
+consume el mapa del Visor. Los reports crudos quedan para auditoría /
+dashboard staff.
 """
 
 from __future__ import annotations
 
+import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from geoalchemy2.functions import ST_AsGeoJSON, ST_DWithin, ST_MakePoint, ST_SetSRID
-from sqlalchemy import cast, func, select
+from sqlalchemy import cast, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from geoalchemy2.types import Geography
 
 from app.auth import get_current_user
-from app.db import get_db
+from app.db import SessionLocal, get_db
 from app.models import CitizenReport, User
 from app.schemas import LatLng, ReportIn, ReportOut
+from app.services.clustering import recluster_municipio
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/reports", tags=["reports"])
+
+
+async def _recluster_bg(municipio_id: UUID) -> None:
+    """Wrapper para BackgroundTasks: abre su propia sesión de DB porque
+    la del request ya se cerró cuando el task corre."""
+    async with SessionLocal() as db:
+        try:
+            count = await recluster_municipio(db, municipio_id)
+            log.info("Reclustering municipio=%s produjo %d alerts", municipio_id, count)
+        except Exception as e:
+            log.warning("Reclustering falló para %s: %s", municipio_id, e)
 
 
 def _point_wkt(lat: float, lng: float) -> str:
@@ -38,10 +51,18 @@ def _point_wkt(lat: float, lng: float) -> str:
 @router.post("", response_model=ReportOut, status_code=201)
 async def create_report(
     payload: ReportIn,
+    background_tasks: BackgroundTasks,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Crea un reporte atado al user autenticado."""
+    """Crea un reporte atado al user autenticado.
+
+    Tras el commit dispara un reclustering en background — así un nuevo
+    reporte que cierre un cluster (≥3 dispositivos únicos) aparece como
+    `public_alert` de inmediato, sin que el usuario tenga que esperar
+    a un cron. El task corre después de enviar la response, así que no
+    agrega latencia al POST.
+    """
     report = CitizenReport(
         municipio_id=payload.municipio_id,
         user_id=user.id,
@@ -61,6 +82,9 @@ async def create_report(
     geojson = row.scalar()
     import json
     coords = json.loads(geojson)["coordinates"]
+
+    background_tasks.add_task(_recluster_bg, payload.municipio_id)
+
     return ReportOut(
         id=report.id,
         municipio_id=report.municipio_id,

@@ -68,10 +68,17 @@ export function apiCreateReport(payload: ApiReportIn): Promise<ApiReportOut> {
   return api.post<ApiReportOut>("/reports", payload);
 }
 
-/** GET /v1/alerts/near — alertas clusterizadas cerca de un punto.
- *
- * `radiusM` default 2 km: suficiente para pintar el mapa del Visor sin
- * traer cientos de alerts. Si el usuario se mueve, re-fetch on-demand. */
+/** GET /v1/alerts — todas las alertas activas de un municipio.
+ * El Visor lo usa para pintar el heatmap completo. */
+export function apiFetchAlertsByMunicipio(
+  municipioId: string,
+): Promise<ApiAlertOut[]> {
+  const qs = new URLSearchParams({ municipio_id: municipioId });
+  return api.get<ApiAlertOut[]>(`/alerts?${qs.toString()}`, { auth: false });
+}
+
+/** GET /v1/alerts/near — alertas dentro de un radio del punto. Útil
+ * para queries "cerca de mí" en Home cuando hay fix de GPS. */
 export function apiFetchAlertsNear(
   municipioId: string,
   lat: number,

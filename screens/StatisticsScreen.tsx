@@ -21,10 +21,11 @@
  */
 
 import { MaterialIcons } from "@expo/vector-icons";
-import { useFocusEffect, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Animated,
   Dimensions,
   PanResponder,
@@ -38,8 +39,19 @@ import {
 import MapView, { Geojson, type MapType, Marker } from "react-native-maps";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import type { FeatureCollection, Geometry } from "geojson";
+import AlertsHeatLayer, { ALERTS_HEAT_BANDS } from "../components/AlertsHeatLayer";
 import IsochroneLegend from "../components/IsochroneLegend";
 import IsochroneOverlay from "../components/IsochroneOverlay";
+import NorthArrow from "../components/NorthArrow";
+import QuickEvacuateSheet, {
+  type ConfirmPayload,
+  type LockedDestination,
+} from "../components/QuickEvacuateSheet";
+import RefugeDetailsModal from "../components/RefugeDetailsModal";
+import StreetViewModal from "../components/StreetViewModal";
+import WeatherBadge from "../components/WeatherBadge";
+import { useRouteContext } from "../context/RouteContext";
+import { useLocationTracking } from "../src/hooks/useLocationTracking";
 import * as Location from "expo-location";
 import avenidaTorrencialData from "../data/amenaza_avenida_torrencial.json";
 import inundacionData from "../data/amenaza_inundacion.json";
@@ -112,21 +124,77 @@ const EMERGENCY_OPTIONS: { label: string; value: EmergencyType; emoji: string }[
 ];
 
 const SCREEN_HEIGHT = Dimensions.get("window").height;
-// Altura del sheet en estados. El colapsado deja visibles handle +
-// título + fila compacta de métricas (~110 px). El expandido se cappea
-// a 48 % del alto de pantalla para que el mapa siga siendo dominante
-// en teléfonos chicos. Los valores ya incluyen espacio típico para el
-// home-indicator (la SafeAreaView lo restará vía paddingBottom).
+// Tres puntos de anclaje para el sheet:
+//   · COLLAPSED: handle + título + fila compacta de métricas (~130 px).
+//   · MID: la mitad típica — cómodo para consultar capas sin perder mapa.
+//   · FULL: alto del contenido real del sheet (medido con onLayout),
+//     cappeado al alto máximo razonable. Antes poníamos un fijo
+//     `SCREEN_HEIGHT - 110` que dejaba un espacio vacío enorme cuando
+//     la lista de capas es corta. Ahora medimos para que el sheet
+//     suba *exactamente* hasta que la última opción sea visible.
+// La decisión entre MID y FULL se toma por velocidad del gesto (fling
+// → FULL, soltada lenta → MID).
 const SHEET_COLLAPSED = 130;
-const SHEET_EXPANDED = Math.min(400, Math.floor(SCREEN_HEIGHT * 0.48));
+const SHEET_MID = Math.min(400, Math.floor(SCREEN_HEIGHT * 0.48));
+// Cap absoluto: aun si el contenido es enorme, no cubrir el header.
+const SHEET_FULL_CAP = Math.floor(SCREEN_HEIGHT - 110);
 
 export default function DatosVisorScreen() {
   const router = useRouter();
   const mapRef = useRef<MapView>(null);
   const insets = useSafeAreaInsets();
+  // Params opcionales para aterrizar enfocado en una alerta específica
+  // (ej: desde la barra roja del Home). Si vienen, activamos la capa
+  // de reportes y animamos la cámara al punto. Se aplica sólo la
+  // primera vez — si el usuario pan-navega, no lo interrumpimos.
+  const rawParams = useLocalSearchParams<{
+    focusLat?: string | string[];
+    focusLng?: string | string[];
+    showReports?: string | string[];
+  }>();
+  const focusParam = useMemo(() => {
+    const pick = (v: string | string[] | undefined) =>
+      Array.isArray(v) ? v[0] : v;
+    const lat = parseFloat(pick(rawParams.focusLat) ?? "");
+    const lng = parseFloat(pick(rawParams.focusLng) ?? "");
+    const sr = pick(rawParams.showReports) === "1";
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    return { lat, lng, showReports: sr };
+  }, [rawParams.focusLat, rawParams.focusLng, rawParams.showReports]);
+  // Contexto compartido para que "Ir aquí" pre-seleccione el destino
+  // antes de saltar al mapa de Evacua con `autoRoute=1`.
+  const {
+    setSelectedDestination,
+    setSelectedInstitucion,
+    setEmergencyType: setCtxEmergencyType,
+    setRouteProfile,
+    setStartMode,
+    setStartPoint,
+    setDestinationMode,
+    setQuickRouteMode,
+    setPendingDestKind,
+    setPickingFromIsochroneMap,
+    setShowingInstitucionesOverlay,
+  } = useRouteContext();
 
   const { graphReady, linkedDestinos } = useGraphBootstrap(puntosEncuentro);
   const { alerts, missing, refresh: refreshCommunity } = useCommunityStatus();
+  // Heading del usuario para la flecha de norte. `location` lo ignoramos
+  // (el mapa usa `showsUserLocation` nativo); solo nos importa el heading.
+  const { heading } = useLocationTracking();
+
+  // Modales de destino (reutilizamos los mismos del Evacua)
+  const [refugeDetailsVisible, setRefugeDetailsVisible] = useState(false);
+  const [refugeDetails, setRefugeDetails] = useState<import("../src/types/v4").RefugeDetails | null>(null);
+  const [streetViewVisible, setStreetViewVisible] = useState(false);
+  const [streetViewTarget, setStreetViewTarget] = useState<{ lat: number; lng: number; name: string } | null>(null);
+  // Sheet de QuickEvacuate en modo "locked": al presionar "Ir aquí" en
+  // un pin (refugio o institución) abrimos el sheet con destino fijo
+  // para pedir solo emergencia + origen. Antes abríamos un Alert nativo
+  // y llevábamos al mapa sin parámetros, lo que obligaba al usuario a
+  // configurarlos en el drawer.
+  const [quickSheetVisible, setQuickSheetVisible] = useState(false);
+  const [lockedDest, setLockedDest] = useState<LockedDestination | null>(null);
 
   // Default: ninguna emergencia y todas las capas apagadas. El mapa
   // arranca limpio; el usuario decide qué mostrar.
@@ -143,8 +211,42 @@ export default function DatosVisorScreen() {
   const [showTime, setShowTime] = useState(false);
   const [showShelters, setShowShelters] = useState(false);
   const [showInstitutions, setShowInstitutions] = useState(false);
+  // Dos vistas diferentes de los reportes ciudadanos:
+  //  · showReports → pins/burbujas individuales con conteo. Útil para
+  //    inspeccionar reportes puntuales.
+  //  · showReportsHeat → mapa de calor agregado estilo isócronas.
+  //    Útil para lectura territorial ("¿dónde está concentrado?") y
+  //    complemento visual al mapa de tiempo.
+  // Son independientes — el usuario puede tener ambos, uno u otro.
   const [showReports, setShowReports] = useState(false);
+  const [showReportsHeat, setShowReportsHeat] = useState(false);
   const [showMissing, setShowMissing] = useState(false);
+
+  // Aplica focusParam una sola vez por sesión: activa la capa de
+  // reportes (si vino el flag) y anima la cámara al punto exacto.
+  // Antes usábamos un `setTimeout(300)` que era un race contra la
+  // inicialización del mapa: en dispositivos lentos el 300ms no
+  // alcanzaba y el `animateToRegion` quedaba no-op. Ahora esperamos
+  // a `onMapReady` (callback real del MapView) para garantizar que
+  // la cámara ya está lista antes de moverla.
+  const [mapReady, setMapReady] = useState(false);
+  const focusApplied = useRef(false);
+  useEffect(() => {
+    if (focusApplied.current) return;
+    if (!focusParam) return;
+    if (!mapReady) return;
+    focusApplied.current = true;
+    if (focusParam.showReports) setShowReports(true);
+    mapRef.current?.animateToRegion(
+      {
+        latitude: focusParam.lat,
+        longitude: focusParam.lng,
+        latitudeDelta: 0.012,
+        longitudeDelta: 0.012,
+      },
+      700,
+    );
+  }, [focusParam, mapReady]);
 
   // Wrapper de setEmergencyType que activa el riesgo por default al pasar
   // de "ninguna" a una amenaza, y lo apaga al volver a "ninguna" para
@@ -171,6 +273,93 @@ export default function DatosVisorScreen() {
     );
   };
 
+  // Auto-fit: animamos la cámara para encajar los puntos de la capa
+  // SOLO cuando el usuario la prende (transición OFF→ON). Esto evita
+  // el "salto" molesto cuando llegan datos nuevos y el usuario estaba
+  // navegando manualmente. Cada capa tiene su ref de estado previo.
+  const fitPadding = {
+    edgePadding: { top: 120, right: 60, bottom: 360, left: 60 },
+    animated: true as const,
+  };
+  const prevShowReports = useRef(false);
+  const prevShowMissing = useRef(false);
+  const prevShowShelters = useRef(false);
+  const prevShowInstitutions = useRef(false);
+
+  useEffect(() => {
+    const justOn = showReports && !prevShowReports.current;
+    prevShowReports.current = showReports;
+    if (justOn && alerts.length > 0) {
+      mapRef.current?.fitToCoordinates(
+        alerts.map((a) => ({ latitude: a.lat, longitude: a.lng })),
+        fitPadding,
+      );
+    }
+  }, [showReports, alerts]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const justOn = showMissing && !prevShowMissing.current;
+    prevShowMissing.current = showMissing;
+    if (justOn && missing.length > 0) {
+      mapRef.current?.fitToCoordinates(
+        missing.map((m) => ({ latitude: m.lastSeenLat, longitude: m.lastSeenLng })),
+        fitPadding,
+      );
+    }
+  }, [showMissing, missing]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const justOn = showShelters && !prevShowShelters.current;
+    prevShowShelters.current = showShelters;
+    if (justOn && puntosEncuentro.length > 0) {
+      mapRef.current?.fitToCoordinates(
+        puntosEncuentro.map((p) => ({ latitude: p.lat, longitude: p.lng })),
+        fitPadding,
+      );
+    }
+  }, [showShelters]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const justOn = showInstitutions && !prevShowInstitutions.current;
+    prevShowInstitutions.current = showInstitutions;
+    if (justOn && instituciones.length > 0) {
+      mapRef.current?.fitToCoordinates(
+        instituciones.map((i) => ({ latitude: i.lat, longitude: i.lng })),
+        fitPadding,
+      );
+    }
+  }, [showInstitutions]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Apaga todas las capas y desselecciona la emergencia. Útil cuando
+  // el usuario activó varias cosas y quiere volver a un mapa limpio
+  // sin tener que tocar cada toggle individualmente.
+  const handleClearSelection = useCallback(() => {
+    // Pasamos por el wrapper `setEmergencyType("ninguna")` para que
+    // también apague showRisk/showTime (esos toggles dependen del tipo
+    // de emergencia y, si los dejamos encendidos sin emergencia, el
+    // mapa queda en un estado inconsistente).
+    setEmergencyType("ninguna");
+    setShowShelters(false);
+    setShowInstitutions(false);
+    setShowReports(false);
+    setShowReportsHeat(false);
+    setShowMissing(false);
+  }, [setEmergencyType]);
+
+  // `hayAlgoActivo` vale true si alguna capa o la emergencia están
+  // activas. Oculta el botón "limpiar" cuando ya no hay nada que
+  // limpiar — evita ruido visual cuando el mapa ya está en su
+  // estado por defecto.
+  const hayAlgoActivo =
+    emergencyType !== "ninguna" ||
+    showRisk ||
+    showTime ||
+    showShelters ||
+    showInstitutions ||
+    showReports ||
+    showReportsHeat ||
+    showMissing;
+
   // Centra el mapa en la ubicación actual del usuario. Útil para que se
   // auto-ubique respecto a polígonos de riesgo y refugios cercanos.
   const handleCenterOnUser = useCallback(async () => {
@@ -196,6 +385,117 @@ export default function DatosVisorScreen() {
     }
   }, []);
 
+  // ─── Interacción con markers (shelter / institution) ────────────────────
+  //
+  // Al tocar un pin abrimos un Alert con tres opciones:
+  //   · "Ir aquí"    → abre QuickEvacuateSheet en modo locked (el
+  //                    destino ya es este pin; solo se preguntan
+  //                    emergencia + origen). Al confirmar, el caller
+  //                    navega a /map y la ruta auto-calcula.
+  //   · "Vista 360°" → abre StreetViewModal inline.
+  //   · "Detalles"   → (solo shelter) RefugeDetailsModal.
+  //
+  // El Alert anterior navegaba al mapa con destino seteado pero sin
+  // emergencia ni origen, obligando a configurar eso en el drawer.
+  // Ahora el sheet captura esos dos parámetros antes de navegar.
+  const openQuickSheet = useCallback((dest: LockedDestination) => {
+    setLockedDest(dest);
+    setQuickSheetVisible(true);
+  }, []);
+
+  // Handler del sheet en modo locked: recibe emergencia+origen, setea
+  // el contexto y navega a /map. La ruta la dispara Case A del
+  // pipeline (para GPS) o CONFIRMAR PUNTO (para manual).
+  const handleLockedConfirm = useCallback((p: ConfirmPayload) => {
+    setQuickSheetVisible(false);
+    if (!lockedDest) return;
+    setSelectedDestination(lockedDest.shelter ?? null);
+    setSelectedInstitucion(lockedDest.institucion ?? null);
+    setCtxEmergencyType(p.emergency);
+    setRouteProfile("foot-walking");
+    setStartPoint(null);
+    setDestinationMode("manual");
+    // pendingDestKind=closest en el pipeline significa "auto-calc
+    // inmediato sin picker"; con selectedDestination/Institucion ya
+    // poblado, calcularRuta ruta a ese punto concreto (no busca el
+    // más cercano).
+    setPendingDestKind("closest");
+    setPickingFromIsochroneMap(false);
+    setShowingInstitucionesOverlay(false);
+    setQuickRouteMode(true);
+    if (p.start === "gps") {
+      setStartMode("gps");
+      router.push({ pathname: "/map", params: { autoRoute: "1" } });
+    } else {
+      setStartMode("manual");
+      router.push({ pathname: "/map", params: { autoOpen: "pickStart" } });
+    }
+  }, [
+    lockedDest, router,
+    setSelectedDestination, setSelectedInstitucion, setCtxEmergencyType,
+    setRouteProfile, setStartPoint, setDestinationMode, setStartMode,
+    setPendingDestKind, setPickingFromIsochroneMap,
+    setShowingInstitucionesOverlay, setQuickRouteMode,
+  ]);
+
+  const handleShelterPress = useCallback((shelter: Destino) => {
+    Alert.alert(
+      shelter.nombre,
+      "¿Qué quieres hacer?",
+      [
+        {
+          text: "🏃 Ir aquí",
+          onPress: () =>
+            openQuickSheet({ kind: "shelter", name: shelter.nombre, shelter }),
+        },
+        {
+          text: "📷 Vista 360°",
+          onPress: () => {
+            setStreetViewTarget({ lat: shelter.lat, lng: shelter.lng, name: shelter.nombre });
+            setStreetViewVisible(true);
+          },
+        },
+        {
+          text: "ℹ️ Detalles",
+          onPress: async () => {
+            const details = await import("../src/services/refugesService").then((m) =>
+              m.getRefugeByName(shelter.nombre),
+            );
+            setRefugeDetails(details ?? {
+              nombre: shelter.nombre,
+              servicios: [],
+              descripcion: "Aún no hay información detallada para este punto.",
+            });
+            setRefugeDetailsVisible(true);
+          },
+        },
+        { text: "Cerrar", style: "cancel" },
+      ],
+    );
+  }, [openQuickSheet]);
+
+  const handleInstitutionPress = useCallback((inst: Institucion) => {
+    Alert.alert(
+      inst.nombre,
+      inst.tipo,
+      [
+        {
+          text: "🏃 Ir aquí",
+          onPress: () =>
+            openQuickSheet({ kind: "institucion", name: inst.nombre, institucion: inst }),
+        },
+        {
+          text: "📷 Vista 360°",
+          onPress: () => {
+            setStreetViewTarget({ lat: inst.lat, lng: inst.lng, name: inst.nombre });
+            setStreetViewVisible(true);
+          },
+        },
+        { text: "Cerrar", style: "cancel" },
+      ],
+    );
+  }, [openQuickSheet]);
+
   // ─── Bottom sheet animado + drag ─────────────────────────────────────────
   // `sheetHeight` es un Animated.Value porque `height` no es native-driver
   // compatible (tenemos que animar JS-side). El overhead es trivial para
@@ -203,53 +503,100 @@ export default function DatosVisorScreen() {
   const sheetHeight = useRef(new Animated.Value(SHEET_COLLAPSED)).current;
   // Snapshot de altura al iniciar el drag (PanResponder no da value vivo).
   const dragStartHeightRef = useRef(SHEET_COLLAPSED);
-  const isExpandedRef = useRef(false);
+  // Estado actual del sheet: -1 colapsado, 0 mid, 1 full. Lo usamos
+  // para que tap en el handle cicle linealmente entre los tres estados
+  // en vez de un simple toggle binario.
+  const sheetStateRef = useRef<-1 | 0 | 1>(-1);
+  // Alto "full" del sheet = alto real del contenido, medido con
+  // onLayout del ScrollView interno. Empezamos con MID como fallback
+  // hasta que haya una medición real. Antes usábamos un fijo `SCREEN -
+  // 110` que dejaba un espacio enorme debajo de la última opción.
+  const [sheetFull, setSheetFull] = useState(SHEET_MID);
+  // Los handlers del pan responder leen `sheetFull` por ref para no
+  // tener que re-crearse en cada medición (con useMemo recreándose
+  // perdemos handlers mid-drag).
+  const sheetFullRef = useRef(SHEET_MID);
+  useEffect(() => {
+    sheetFullRef.current = sheetFull;
+  }, [sheetFull]);
+
+  // Suma del contenido medido del sheet (handle + header + compactRow +
+  // detailContent expandido). La llamamos al layout del ScrollView
+  // interno. Se suma también el paddingBottom (insets.bottom).
+  const onSheetContentLayout = useCallback(
+    (contentHeight: number) => {
+      // contentHeight = alto del bloque detailContent (capas + chips).
+      // Le sumamos el fijo de encima: handle + header + compactRow.
+      const FIXED_TOP = 130; // = SHEET_COLLAPSED aprox.
+      const total = FIXED_TOP + contentHeight + insets.bottom + 8;
+      const clamped = Math.min(SHEET_FULL_CAP, Math.max(SHEET_MID, total));
+      if (Math.abs(clamped - sheetFull) > 4) {
+        setSheetFull(clamped);
+      }
+    },
+    [insets.bottom, sheetFull],
+  );
 
   const snapSheet = useCallback(
     (target: number) => {
-      isExpandedRef.current = target === SHEET_EXPANDED;
+      sheetStateRef.current =
+        target === sheetFullRef.current ? 1 : target === SHEET_MID ? 0 : -1;
       Animated.spring(sheetHeight, {
         toValue: target,
         useNativeDriver: false,
-        friction: 9,
-        tension: 55,
+        friction: 11,
+        tension: 80,
       }).start();
     },
     [sheetHeight],
   );
 
   const toggleSheet = useCallback(() => {
-    snapSheet(isExpandedRef.current ? SHEET_COLLAPSED : SHEET_EXPANDED);
+    // Tap en el handle cicla: colapsado → mid → full → colapsado.
+    const next =
+      sheetStateRef.current === -1
+        ? SHEET_MID
+        : sheetStateRef.current === 0
+          ? sheetFullRef.current
+          : SHEET_COLLAPSED;
+    snapSheet(next);
   }, [snapSheet]);
 
   const panResponder = useMemo(
     () =>
       PanResponder.create({
-        // Activamos el gesto al primer movimiento vertical notable, así
-        // un tap simple no lo dispara y deja pasar al TouchableOpacity
-        // del handle (para toggle con tap).
         onStartShouldSetPanResponder: () => false,
         onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 4,
         onPanResponderGrant: () => {
-          // React Native tipó `_value` como private, pero leerlo acá es
-          // el patrón oficial documentado para PanResponder + Animated.
           dragStartHeightRef.current = (sheetHeight as unknown as { _value: number })._value;
         },
         onPanResponderMove: (_, g) => {
           const next = Math.max(
             SHEET_COLLAPSED,
-            Math.min(SHEET_EXPANDED, dragStartHeightRef.current - g.dy),
+            Math.min(sheetFullRef.current, dragStartHeightRef.current - g.dy),
           );
           sheetHeight.setValue(next);
         },
         onPanResponderRelease: (_, g) => {
           const current = (sheetHeight as unknown as { _value: number })._value;
-          // Decidimos por velocidad si hay impulso claro; si no, por la
-          // mitad del recorrido.
-          const midpoint = (SHEET_COLLAPSED + SHEET_EXPANDED) / 2;
-          const shouldExpand =
-            g.vy < -0.3 || (Math.abs(g.vy) < 0.3 && current > midpoint);
-          snapSheet(shouldExpand ? SHEET_EXPANDED : SHEET_COLLAPSED);
+          const full = sheetFullRef.current;
+          const FLING_UP = -0.8;
+          const FLING_DOWN = 0.8;
+          let target: number;
+          if (g.vy < FLING_UP) {
+            target = full;
+          } else if (g.vy > FLING_DOWN) {
+            target = SHEET_COLLAPSED;
+          } else {
+            const distances = [
+              { v: SHEET_COLLAPSED, d: Math.abs(current - SHEET_COLLAPSED) },
+              { v: SHEET_MID, d: Math.abs(current - SHEET_MID) },
+              { v: full, d: Math.abs(current - full) },
+            ];
+            distances.sort((a, b) => a.d - b.d);
+            target = distances[0].v;
+          }
+          snapSheet(target);
         },
       }),
     [sheetHeight, snapSheet],
@@ -339,35 +686,12 @@ export default function DatosVisorScreen() {
         </View>
       </View>
 
-      {/* Chips de emergencia — barra compacta entre header y mapa.
-          La dejamos como fila normal (no overlay) para no ocultar parte
-          del mapa con un panel flotante superior. */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.emergencyBar}
-        contentContainerStyle={styles.emergencyBarContent}
-      >
-        {EMERGENCY_OPTIONS.map((opt) => {
-          const isActive = emergencyType === opt.value;
-          return (
-            <TouchableOpacity
-              key={opt.value}
-              style={[styles.emergencyChip, isActive && styles.emergencyChipActive]}
-              onPress={() => setEmergencyType(opt.value)}
-              accessibilityRole="button"
-              accessibilityLabel={`Filtrar por ${opt.label}`}
-              accessibilityState={{ selected: isActive }}
-            >
-              <Text style={[styles.emergencyChipText, isActive && styles.emergencyChipTextActive]}>
-                {opt.emoji} {opt.label}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </ScrollView>
+      {/* La barra horizontal de tipos de amenaza se movió al sheet
+          (sección "Tipo de amenaza", arriba de Capas visibles). En
+          Android se cortaba el último chip — como el sheet es ancho
+          completo y hay scroll vertical, allá caben sin problema. */}
 
-      {/* Mapa — ocupa todo el espacio entre barra de emergencia y sheet. */}
+      {/* Mapa — ocupa todo el espacio entre header y sheet. */}
       <View style={styles.mapWrap}>
         <MapView
           ref={mapRef}
@@ -376,6 +700,7 @@ export default function DatosVisorScreen() {
           showsUserLocation
           showsMyLocationButton={false}
           mapType={mapType}
+          onMapReady={() => setMapReady(true)}
         >
           {/* Polígonos de riesgo (amenaza del tipo elegido arriba).
               Se pintan antes que las isócronas para que el heatmap quede
@@ -399,6 +724,7 @@ export default function DatosVisorScreen() {
               coordinate={{ latitude: d.lat, longitude: d.lng }}
               title={d.nombre}
               pinColor="green"
+              onPress={() => handleShelterPress(d)}
             />
           ))}
 
@@ -409,17 +735,44 @@ export default function DatosVisorScreen() {
               title={inst.nombre}
               description={inst.tipo}
               pinColor="gold"
+              onPress={() => handleInstitutionPress(inst)}
             />
           ))}
 
+          {/* Dos vistas distintas de los reportes validados:
+              · Mapa de calor (showReportsHeat) → círculos escalonados
+                por `supportCount`, estilo bandas de isócronas. Antes
+                usábamos `<Heatmap>` de react-native-maps pero
+                crasheaba en iOS con datasets pequeños; este overlay
+                es estable en ambas plataformas.
+              · Burbujas con conteo (showReports) → pins con el
+                supportCount de cada cluster. Lectura puntual.
+              Son independientes para que el usuario pueda escoger la
+              representación que necesita. */}
+          {showReportsHeat && <AlertsHeatLayer alerts={alerts} />}
           {showReports && alerts.map((a) => (
             <Marker
               key={`alert-${a.id}`}
               coordinate={{ latitude: a.lat, longitude: a.lng }}
               title={labelForAlert(a.type)}
-              description={`${a.uniqueDeviceCount} ciudadano(s)`}
-              pinColor="red"
-            />
+              description={`${a.supportCount} reporte${a.supportCount === 1 ? "" : "s"} · ${a.uniqueDeviceCount} ciudadano${a.uniqueDeviceCount === 1 ? "" : "s"}`}
+              anchor={{ x: 0.5, y: 0.5 }}
+            >
+              {/* No pasamos `tracksViewChanges={false}`: en algunos
+                  dispositivos queda el marker vacío en la primera render
+                  cuando el child View aún no midió. Con el default
+                  (true) el marker se repinta tras el layout.
+                  El costo perf es trivial para N<100 alerts. */}
+              <View style={[
+                styles.alertBubble,
+                a.supportCount >= 5 && styles.alertBubbleHigh,
+                a.supportCount >= 10 && styles.alertBubbleCritical,
+              ]}>
+                <Text style={styles.alertBubbleText}>
+                  {a.supportCount > 99 ? "99+" : a.supportCount}
+                </Text>
+              </View>
+            </Marker>
           ))}
 
           {showMissing && missing.map((p) => (
@@ -447,15 +800,19 @@ export default function DatosVisorScreen() {
             · Nivel de riesgo (polígonos Baja/Media/Alta) si está activo
             · Tiempo a refugio (isócronas) si está activo.
             Cada uno aparece solo si su capa está visible. */}
-        {(riskVisible || timeVisible) && (
+        {(riskVisible || timeVisible || (showReportsHeat && alerts.length > 0)) && (
           <View style={styles.legendWrap} pointerEvents="none">
             {riskVisible && activeHazard && <RiskLegend emergencyType={activeHazard} />}
             {timeVisible && <IsochroneLegend />}
+            {showReportsHeat && alerts.length > 0 && <ReportsHeatLegend />}
           </View>
         )}
 
-        {/* Botones flotantes arriba-derecha: tipo de mapa + centrar
-            ubicación. Ambos son acciones frecuentes de exploración. */}
+        {/* Botones flotantes arriba-derecha: tipo de mapa + clima
+            + centrar ubicación. Reproducen la paridad con el mapa de
+            Evacua — el Visor es el "mismo mapa" sin el flujo de
+            ruteo, así que debe ofrecer las mismas herramientas de
+            lectura territorial. */}
         <View style={styles.mapBtnStack}>
           <TouchableOpacity
             style={styles.mapFloatBtn}
@@ -472,6 +829,7 @@ export default function DatosVisorScreen() {
               color="#0f172a"
             />
           </TouchableOpacity>
+          <WeatherBadge />
           <TouchableOpacity
             style={styles.mapFloatBtn}
             onPress={handleCenterOnUser}
@@ -480,17 +838,26 @@ export default function DatosVisorScreen() {
           >
             <MaterialIcons name="my-location" size={22} color="#0f172a" />
           </TouchableOpacity>
+          {hayAlgoActivo && (
+            <TouchableOpacity
+              style={[styles.mapFloatBtn, styles.clearBtn]}
+              onPress={handleClearSelection}
+              accessibilityRole="button"
+              accessibilityLabel="Limpiar selección: apaga todas las capas y tipos de emergencia"
+            >
+              <MaterialIcons name="refresh" size={22} color="#dc2626" />
+            </TouchableOpacity>
+          )}
+          <View style={styles.northBadge}>
+            <NorthArrow heading={heading} />
+          </View>
         </View>
 
-        {/* Hint cuando todo está apagado: orientar al usuario nuevo. */}
-        {!showShelters && !showInstitutions && !showReports && !showMissing && !riskVisible && !timeVisible && (
-          <View style={styles.emptyHint} pointerEvents="none">
-            <MaterialIcons name="arrow-downward" size={16} color="#334155" />
-            <Text style={styles.emptyHintText}>
-              Elige una emergencia arriba o activa capas abajo
-            </Text>
-          </View>
-        )}
+        {/* El hint "Elige una emergencia arriba" se retiró: ahora los
+            controles de tipo de amenaza y de capas viven dentro del
+            bottom sheet, y los iconos compactos del resumen son
+            clickeables como atajo — no hay contenido "arriba" que
+            el usuario tenga que buscar. */}
 
         {/* Los toggles de capas (Refugios, Instituciones, Reportes,
             Desaparecidos, Mapa de calor) viven ahora dentro del bottom
@@ -531,12 +898,41 @@ export default function DatosVisorScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Fila compacta — visible en ambos estados. */}
+        {/* Fila compacta — visible en ambos estados. Cada métrica es
+            ahora un toggle: tocar prende/apaga la capa correspondiente
+            y, al prenderla, la cámara hace fit a los puntos de esa capa
+            (igual que los LayerToggle de capas de mapa). El usuario
+            pidió que las 4 tarjetas del resumen se comporten así para
+            no tener que duplicar el control en "capas visibles". */}
         <View style={styles.compactRow}>
-          <CompactMetric icon="📍" value={puntosEncuentro.length} label="refugios" />
-          <CompactMetric icon="🏥" value={instituciones.length} label="inst." />
-          <CompactMetric icon="⚠️" value={alerts.length} label="alertas" />
-          <CompactMetric icon="🔍" value={missing.length} label="desap." />
+          <CompactMetric
+            icon="📍"
+            value={puntosEncuentro.length}
+            label="p. encuentro"
+            active={showShelters}
+            onPress={() => setShowShelters((v) => !v)}
+          />
+          <CompactMetric
+            icon="🏥"
+            value={instituciones.length}
+            label="inst."
+            active={showInstitutions}
+            onPress={() => setShowInstitutions((v) => !v)}
+          />
+          <CompactMetric
+            icon="⚠️"
+            value={alerts.length}
+            label="reportes"
+            active={showReports}
+            onPress={() => setShowReports((v) => !v)}
+          />
+          <CompactMetric
+            icon="🔍"
+            value={missing.length}
+            label="desap."
+            active={showMissing}
+            onPress={() => setShowMissing((v) => !v)}
+          />
         </View>
 
         {/* Detalle — aparece al expandir. Primero las capas (qué se ve
@@ -546,8 +942,50 @@ export default function DatosVisorScreen() {
           style={styles.detailScroll}
           contentContainerStyle={styles.detailContent}
           showsVerticalScrollIndicator={false}
+          // Medimos el alto real del contenido para que el snap "FULL"
+          // ajuste el sheet exactamente hasta la última opción — sin
+          // dejar espacio vacío debajo.
+          onContentSizeChange={(_w, h) => onSheetContentLayout(h)}
         >
-          <Text style={styles.sectionLabel}>Capas visibles</Text>
+          {/* Tipo de amenaza — chips horizontales. El usuario selecciona
+              qué tipo de emergencia está consultando. Gatilla las capas
+              de riesgo y el cálculo de isócronas (cuando están activas). */}
+          <Text style={styles.sectionLabel}>Tipo de amenaza</Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.emergencyChipRow}
+          >
+            {EMERGENCY_OPTIONS.map((opt) => {
+              const isActive = emergencyType === opt.value;
+              return (
+                <TouchableOpacity
+                  key={opt.value}
+                  style={[styles.emergencyChip, isActive && styles.emergencyChipActive]}
+                  onPress={() => setEmergencyType(opt.value)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Filtrar por ${opt.label}`}
+                  accessibilityState={{ selected: isActive }}
+                >
+                  <Text style={[
+                    styles.emergencyChipText,
+                    isActive && styles.emergencyChipTextActive,
+                  ]}>
+                    {opt.emoji} {opt.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+
+          {/* Capas de MAPA (no de puntos): polígonos de riesgo,
+              isócronas y heatmap agregado de alertas. Las capas de
+              puntos individuales (refugios, instituciones, reportes,
+              desaparecidos) se controlan desde la fila compacta de
+              arriba — tocar cada ícono prende/apaga la capa con fit
+              automático. Separar "mapas" de "puntos" evita duplicar
+              controles. */}
+          <Text style={[styles.sectionLabel, { marginTop: 16 }]}>Capas de mapa</Text>
           <View style={styles.layerList}>
             <LayerToggle
               label="Mapa nivel de riesgo"
@@ -578,40 +1016,65 @@ export default function DatosVisorScreen() {
               }
             />
             <LayerToggle
-              label="Refugios"
-              icon="place"
-              active={showShelters}
-              onValueChange={setShowShelters}
-              color="#059669"
-              badge={puntosEncuentro.length}
-            />
-            <LayerToggle
-              label="Instituciones"
-              icon="local-hospital"
-              active={showInstitutions}
-              onValueChange={setShowInstitutions}
-              color="#b45309"
-              badge={instituciones.length}
-            />
-            <LayerToggle
-              label="Alertas ciudadanas"
-              icon="warning"
-              active={showReports}
-              onValueChange={setShowReports}
-              color="#dc2626"
-              badge={alerts.length}
-            />
-            <LayerToggle
-              label="Desaparecidos"
-              icon="person-search"
-              active={showMissing}
-              onValueChange={setShowMissing}
-              color="#9333ea"
-              badge={missing.length}
+              label="Mapa de calor de reportes"
+              icon="whatshot"
+              active={showReportsHeat}
+              onValueChange={setShowReportsHeat}
+              color="#ea580c"
+              disabled={alerts.length === 0}
+              disabledHint="No hay reportes activos todavía"
+              hint={
+                showReportsHeat && alerts.length > 0
+                  ? `Densidad de ${alerts.length} reporte${alerts.length === 1 ? "" : "s"}`
+                  : undefined
+              }
             />
           </View>
         </ScrollView>
       </Animated.View>
+
+      {/* Modales reutilizados de Evacua — misma UX para que el usuario
+          reconozca el patrón entre ambas pantallas. */}
+      <RefugeDetailsModal
+        visible={refugeDetailsVisible}
+        onClose={() => setRefugeDetailsVisible(false)}
+        refuge={refugeDetails}
+        onNavigate={() => {
+          setRefugeDetailsVisible(false);
+          if (refugeDetails) {
+            const sh = puntosEncuentro.find((p) => p.nombre === refugeDetails.nombre);
+            if (sh) openQuickSheet({ kind: "shelter", name: sh.nombre, shelter: sh });
+          }
+        }}
+        onStreetView={
+          refugeDetails
+            ? () => {
+                const sh = puntosEncuentro.find((p) => p.nombre === refugeDetails.nombre);
+                if (sh) {
+                  setStreetViewTarget({ lat: sh.lat, lng: sh.lng, name: sh.nombre });
+                  setStreetViewVisible(true);
+                }
+              }
+            : undefined
+        }
+      />
+      <StreetViewModal
+        visible={streetViewVisible}
+        onClose={() => setStreetViewVisible(false)}
+        latitude={streetViewTarget?.lat ?? 0}
+        longitude={streetViewTarget?.lng ?? 0}
+        placeName={streetViewTarget?.name}
+      />
+
+      {/* Sheet de QuickEvacuate en modo locked — se abre al presionar
+          "Ir aquí" sobre un pin. Solo pide emergencia y origen porque
+          el destino ya fue elegido al tocar el pin. */}
+      <QuickEvacuateSheet
+        visible={quickSheetVisible}
+        onClose={() => setQuickSheetVisible(false)}
+        onConfirm={handleLockedConfirm}
+        lockedDestination={lockedDest}
+      />
     </SafeAreaView>
   );
 }
@@ -627,6 +1090,30 @@ function labelForAlert(type: string): string {
     case "refugio_cerrado": return "Refugio cerrado";
     default: return "Alerta ciudadana";
   }
+}
+
+function ReportsHeatLegend() {
+  // Pill compacto con las bandas de AlertsHeatLayer. Muestra un
+  // swatch por banda con el umbral mínimo ("≥1", "≥3", "≥5"…). Sigue
+  // el mismo lenguaje visual que IsochroneLegend.
+  return (
+    <View style={styles.riskLegend}>
+      <Text style={styles.riskLegendTitle}>Reportes (conteo)</Text>
+      <View style={styles.riskLegendRow}>
+        {ALERTS_HEAT_BANDS.map((b) => (
+          <View key={b.min} style={styles.riskLegendItem}>
+            <View
+              style={[
+                styles.riskLegendSwatch,
+                { backgroundColor: b.fill, borderColor: b.stroke },
+              ]}
+            />
+            <Text style={styles.riskLegendLabel}>≥{b.min}</Text>
+          </View>
+        ))}
+      </View>
+    </View>
+  );
 }
 
 function RiskLegend({ emergencyType }: { emergencyType: Exclude<EmergencyType, "ninguna"> }) {
@@ -721,39 +1208,35 @@ function LayerToggle({
   );
 }
 
-interface MetricCardProps {
-  value: string;
-  label: string;
-  icon: MaterialIconName;
-  color: string;
-  bg: string;
-}
-
-function MetricCard({ value, label, icon, color, bg }: MetricCardProps) {
-  return (
-    <View style={[styles.metricCard, { backgroundColor: bg }]}>
-      <MaterialIcons name={icon} size={22} color={color} />
-      <Text style={[styles.metricValue, { color }]}>{value}</Text>
-      <Text style={styles.metricLabel}>{label}</Text>
-    </View>
-  );
-}
-
 function CompactMetric({
   icon,
   value,
   label,
+  active,
+  onPress,
 }: {
   icon: string;
   value: number;
   label: string;
+  active?: boolean;
+  onPress?: () => void;
 }) {
+  // El acento azul indica que la capa está activa en el mapa. Usamos
+  // TouchableOpacity siempre (si no hay onPress, con activeOpacity=1
+  // se comporta visualmente igual a View sin feedback).
   return (
-    <View style={styles.compactMetric}>
+    <TouchableOpacity
+      style={[styles.compactMetric, active && styles.compactMetricActive]}
+      onPress={onPress}
+      activeOpacity={onPress ? 0.7 : 1}
+      accessibilityRole={onPress ? "button" : undefined}
+      accessibilityLabel={onPress ? `${label}: ${value}. Toca para ${active ? "ocultar" : "ver"} en el mapa` : undefined}
+      accessibilityState={onPress ? { selected: !!active } : undefined}
+    >
       <Text style={styles.compactIcon}>{icon}</Text>
-      <Text style={styles.compactValue}>{value}</Text>
-      <Text style={styles.compactLabel}>{label}</Text>
-    </View>
+      <Text style={[styles.compactValue, active && { color: "#4338ca" }]}>{value}</Text>
+      <Text style={[styles.compactLabel, active && { color: "#4338ca" }]}>{label}</Text>
+    </TouchableOpacity>
   );
 }
 
@@ -778,18 +1261,12 @@ const styles = StyleSheet.create({
   headerTitle: { color: "#fff", fontSize: 17, fontWeight: "700" },
   headerSubtitle: { color: "#c7d2fe", fontSize: 11, marginTop: 1 },
 
-  // Barra de chips de emergencia entre header y mapa.
-  emergencyBar: {
-    maxHeight: 48,
-    flexGrow: 0,
-    backgroundColor: "#fff",
-    borderBottomWidth: 1,
-    borderBottomColor: "#e5e7eb",
-  },
-  emergencyBarContent: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+  // Fila de chips de emergencia dentro del sheet (sección "Tipo de
+  // amenaza"). Scroll horizontal; los estilos de chip propios abajo.
+  emergencyChipRow: {
+    paddingVertical: 2,
     gap: 8,
+    paddingRight: 4, // aire al final para que el último chip no pegue al borde
   },
   emergencyChip: {
     paddingHorizontal: 14,
@@ -858,7 +1335,9 @@ const styles = StyleSheet.create({
   // tiempo) aparecen apiladas cuando el usuario tiene ambas activas.
   legendWrap: { position: "absolute", top: 10, left: 10, gap: 8 },
   riskLegend: {
-    backgroundColor: "rgba(255,255,255,0.95)",
+    // Transparente para ver los polígonos debajo — pareja visual con
+    // IsochroneLegend. El contraste se mantiene con texto/shadow.
+    backgroundColor: "rgba(255,255,255,0.7)",
     borderRadius: 14,
     paddingVertical: 6,
     paddingHorizontal: 10,
@@ -900,6 +1379,27 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 5,
   },
+  // Variante para "limpiar selección" — borde rojo tenue para sugerir
+  // acción destructiva sin gritar al usuario.
+  clearBtn: {
+    borderWidth: 1.5,
+    borderColor: "#fecaca",
+  },
+  // Contenedor redondo para la flecha de norte — mismo look-and-feel
+  // que en Evacua. NorthArrow rota internamente según heading.
+  northBadge: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "rgba(255,255,255,0.95)",
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.18,
+    shadowRadius: 4,
+    elevation: 5,
+  },
   emptyHint: {
     position: "absolute",
     alignSelf: "center",
@@ -928,6 +1428,33 @@ const styles = StyleSheet.create({
     alignItems: "center",
     borderWidth: 2,
     borderColor: "#fff",
+  },
+  // Burbuja estilo "Uber surge" — círculo con número del conteo.
+  // Escalonado por cantidad de reportes: verde/ámbar/rojo según severidad.
+  alertBubble: {
+    minWidth: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: "#f59e0b",
+    paddingHorizontal: 7,
+    borderWidth: 2.5,
+    borderColor: "#ffffff",
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.35,
+    shadowRadius: 3,
+    elevation: 5,
+  },
+  alertBubbleHigh: { backgroundColor: "#ea580c" },   // ≥ 5 reportes
+  alertBubbleCritical: { backgroundColor: "#b91c1c" }, // ≥ 10 reportes
+  alertBubbleText: {
+    color: "#ffffff",
+    fontWeight: "900",
+    fontSize: 13,
+    letterSpacing: -0.3,
+    includeFontPadding: false,
   },
 
   // Bottom sheet
@@ -980,8 +1507,16 @@ const styles = StyleSheet.create({
   },
   compactMetric: {
     alignItems: "center",
-    paddingHorizontal: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 4,
     flex: 1,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: "transparent",
+  },
+  compactMetricActive: {
+    backgroundColor: "#eef2ff",
+    borderColor: "#4338ca",
   },
   compactIcon: { fontSize: 18, lineHeight: 22 },
   compactValue: { fontSize: 18, fontWeight: "800", color: "#0f172a" },
@@ -1004,18 +1539,4 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
     marginBottom: 8,
   },
-  metricsGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
-  },
-  metricCard: {
-    flexBasis: "47%",
-    flexGrow: 1,
-    padding: 12,
-    borderRadius: 12,
-    gap: 4,
-  },
-  metricValue: { fontSize: 22, fontWeight: "800" },
-  metricLabel: { fontSize: 11, color: "#475569", fontWeight: "600" },
 });

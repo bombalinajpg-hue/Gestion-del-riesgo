@@ -12,6 +12,13 @@ import {
 } from "../src/types/types";
 
 type DestinationMode = "manual" | "closest";
+// ★ v4.5: elección de "destino preferido" que se hace en la encuesta
+// de QuickEvacuate ANTES de llegar al mapa. Se aplica cuando el usuario
+// confirma el punto de inicio manualmente (Case B del pipeline).
+//   · closest       → ruta directa al refugio más cercano (auto-calc)
+//   · heatmap       → activa isócronas y deja picking en el mapa
+//   · instituciones → activa overlay de instituciones y deja picking
+export type PendingDestKind = "closest" | "heatmap" | "instituciones" | null;
 
 const rawblockedRoutes = rawblockedRoutesJson as FeatureCollection<
   Geometry,
@@ -56,6 +63,16 @@ interface RouteContextType {
   // prompts automáticos en /map. Se limpia al completar o cancelar.
   quickRouteMode: boolean;
   setQuickRouteMode: React.Dispatch<React.SetStateAction<boolean>>;
+  // ★ v4.5: destino preelegido desde la encuesta QuickEvacuate. Se
+  // lee en MapViewContainer al confirmar el punto de inicio manual
+  // para decidir si auto-calcular ruta o abrir picker (heatmap /
+  // instituciones).
+  pendingDestKind: PendingDestKind;
+  setPendingDestKind: React.Dispatch<React.SetStateAction<PendingDestKind>>;
+  /** Limpia TODO el estado a valores por defecto. Se llama al hacer
+   *  logout para que el siguiente usuario del mismo dispositivo no
+   *  vea rastros (destino, emergencia, punto, etc.) del anterior. */
+  resetAll: () => void;
 }
 
 const RouteContext = createContext<RouteContextType | undefined>(undefined);
@@ -85,10 +102,30 @@ export const RouteProvider: React.FC<{ children: React.ReactNode }> = ({
   const [pickingFromIsochroneMap, setPickingFromIsochroneMap] = useState(false);
   const [showingInstitucionesOverlay, setShowingInstitucionesOverlay] = useState(false);
   const [quickRouteMode, setQuickRouteMode] = useState(false);
+  const [pendingDestKind, setPendingDestKind] = useState<PendingDestKind>(null);
 
   useEffect(() => {
     setBlockedRoutes(rawblockedRoutes as FeatureCollection);
   }, []);
+
+  // Reset completo del contexto. Deliberadamente no borra la lista de
+  // blockedRoutes inicial (es data estática del municipio, no depende
+  // del usuario) — el useEffect de emergencyType la re-filtrará.
+  const resetAll = () => {
+    setRouteProfile("foot-walking");
+    setStartMode("gps");
+    setStartPoint(null);
+    setSelectedDestination(null);
+    setSelectedInstitucion(null);
+    setEmergencyType("ninguna");
+    setDestinationMode("closest");
+    setShouldCenterOnUser(false);
+    setShouldScrollToDestinos(false);
+    setPickingFromIsochroneMap(false);
+    setShowingInstitucionesOverlay(false);
+    setQuickRouteMode(false);
+    setPendingDestKind(null);
+  };
 
   useEffect(() => {
     if (emergencyType === "ninguna") {
@@ -133,6 +170,9 @@ export const RouteProvider: React.FC<{ children: React.ReactNode }> = ({
         setShowingInstitucionesOverlay,
         quickRouteMode,
         setQuickRouteMode,
+        pendingDestKind,
+        setPendingDestKind,
+        resetAll,
       }}
     >
       {children}

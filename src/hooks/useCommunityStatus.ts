@@ -28,7 +28,9 @@ import {
   recomputePublicAlerts,
 } from "../services/reportsService";
 import { getAllGroups } from "../services/familyGroupsService";
-import type { PublicAlert } from "../types/graph";
+import { apiFetchAlertsByMunicipio, type ApiAlertOut } from "../services/apiReports";
+import { getActiveMunicipio } from "./useMunicipio";
+import type { PublicAlert, ReportType, ReportSeverity } from "../types/graph";
 import type { FamilyGroup, MissingPerson } from "../types/v4";
 
 export interface CommunitySnapshot {
@@ -51,6 +53,46 @@ export interface RefreshOptions {
   maxAgeMs?: number;
 }
 
+/** Convierte un `ApiAlertOut` (shape del backend) a `PublicAlert`
+ * (shape que espera el resto del frontend). El mapeo es directo salvo
+ * por `reportIds` y `updatedAt` que el backend no expone — los
+ * dejamos vacío/derivado porque los consumidores del mapa no los usan. */
+function apiAlertToLocal(a: ApiAlertOut): PublicAlert {
+  return {
+    id: a.id,
+    type: a.type as ReportType,
+    lat: a.centroid.lat,
+    lng: a.centroid.lng,
+    supportCount: a.support_count,
+    uniqueDeviceCount: a.unique_device_count,
+    firstReportAt: a.first_at,
+    lastReportAt: a.last_at,
+    aggregatedSeverity: (a.aggregated_severity ?? undefined) as ReportSeverity | undefined,
+    samplePhotoUri: a.sample_photo_url ?? undefined,
+    // `reportIds` no lo expone el backend (los raw reports son internos
+    // al cluster); el frontend no lo usa para renderizar, solo para
+    // traza offline. Dejamos [] para alerts del backend.
+    reportIds: [],
+    // `confidence` = proxy del ratio unique_devices/support. El frontend
+    // lo usaba para ordenar; acá lo derivamos del conteo.
+    confidence: Math.min(
+      1,
+      a.unique_device_count / Math.max(3, a.unique_device_count),
+    ),
+  };
+}
+
+async function fetchAlertsFromApi(): Promise<ApiAlertOut[] | null> {
+  const muni = getActiveMunicipio();
+  if (!muni) return null;
+  // Antes usábamos `/alerts/near` con centro del bbox + radio 50 km.
+  // Esto fallaba cuando los reportes caían lejos del bbox (p. ej.
+  // testeando desde Bogotá con el municipio de Santa Rosa). Ahora
+  // pedimos TODAS las alertas del municipio — sin filtro espacial,
+  // el bbox del mapa ya se encarga del encuadre visual.
+  return apiFetchAlertsByMunicipio(muni.id);
+}
+
 export async function refreshCommunityStatus(
   opts: RefreshOptions = {},
 ): Promise<void> {
@@ -61,15 +103,34 @@ export async function refreshCommunityStatus(
   if (inflight) return inflight;
   inflight = (async () => {
     try {
+      // El recompute local ya no es necesario si el backend hace el
+      // clustering. Solo lo corremos si el flag está explícito (para
+      // escenarios offline donde el backend no está alcanzable y el
+      // usuario depende del cluster local).
       if (opts.recompute) {
         try {
           await recomputePublicAlerts();
         } catch (e) {
-          console.warn("[useCommunityStatus] recompute:", e);
+          console.warn("[useCommunityStatus] recompute local:", e);
         }
       }
-      const [alerts, missing, groups] = await Promise.all([
-        getActiveBlockingAlerts(),
+
+      // Alertas: priorizamos API; si falla caemos al cluster local.
+      let alerts: PublicAlert[];
+      try {
+        const apiAlerts = await fetchAlertsFromApi();
+        if (apiAlerts !== null) {
+          alerts = apiAlerts.map(apiAlertToLocal);
+        } else {
+          // No hay municipio cacheado aún — usa local.
+          alerts = await getActiveBlockingAlerts();
+        }
+      } catch (e) {
+        console.warn("[useCommunityStatus] API falló, fallback local:", e);
+        alerts = await getActiveBlockingAlerts();
+      }
+
+      const [missing, groups] = await Promise.all([
         getActiveMissing(),
         getAllGroups(),
       ]);

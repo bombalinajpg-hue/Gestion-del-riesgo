@@ -28,18 +28,25 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import FamilyGroupModal from "../components/FamilyGroupModal";
 import MissingPersonsModal from "../components/MissingPersonsModal";
-import QuickEvacuateSheet, { type StartSource } from "../components/QuickEvacuateSheet";
+import QuickEvacuateSheet, { type ConfirmPayload } from "../components/QuickEvacuateSheet";
+import ReportModal from "../components/ReportModal";
 import SafetyStatusModal from "../components/SafetyStatusModal";
 import { useRouteContext } from "../context/RouteContext";
 import { useCommunityStatus } from "../src/hooks/useCommunityStatus";
-import type { EmergencyType } from "../src/types/types";
+import destinosRaw from "../data/destinos.json";
+import institucionesRaw from "../data/instituciones.json";
+import type { Destino, Institucion } from "../src/types/types";
 
-// Helper de pluralización en español. El texto corto ("N alertas cerca")
-// funciona mejor en barras angostas que la forma larga anterior — la
-// palabra "ciudadana" no agrega información en este contexto porque es
-// el único tipo de alerta que la app muestra en la barra.
+const destinos = destinosRaw as Destino[];
+const instituciones = institucionesRaw as Institucion[];
+const puntosEncuentro = destinos.filter((d) => d.tipo === "punto_encuentro");
+
+// Helper de pluralización en español. Usamos "reporte" (no "alerta")
+// porque el usuario se confundía pensando que era una alerta oficial
+// de evacuación. "Reporte" comunica mejor que es información enviada
+// por ciudadanos.
 function pluralizeAlerts(count: number): string {
-  return count === 1 ? "1 alerta cerca" : `${count} alertas cerca`;
+  return count === 1 ? "1 reporte cerca" : `${count} reportes cerca`;
 }
 
 type MaterialIconName = React.ComponentProps<typeof MaterialIcons>["name"];
@@ -73,15 +80,9 @@ const MODULES: ModuleDef[] = [
     bgColor: "#fee2e2",
     screen: "/emergency",
   },
-  {
-    id: "community",
-    title: "Participación Ciudadana",
-    subtitle: "Reporta · Familia · Desaparecidos",
-    icon: "group",
-    color: "#7c3aed",
-    bgColor: "#ede9fe",
-    screen: "/community",
-  },
+  // `community` se quitó: todas sus herramientas (Reportar, Familia,
+  // Desaparecidos, Estado) están en la fila "Durante la emergencia"
+  // arriba. Mantener el módulo duplicaba la UI sin agregar valor.
   {
     id: "training",
     title: "Capacitación",
@@ -116,8 +117,7 @@ export default function HomeScreen() {
   // Cache compartida entre pantallas. Refrescamos al enfocar solo si la
   // cache es más vieja que 15 s — si ya se actualizó recientemente desde
   // otra pantalla, no duplicamos queries.
-  const { alertCount: activeAlerts, missingCount: activeMissing, refresh } =
-    useCommunityStatus();
+  const { alerts, alertCount: activeAlerts, refresh } = useCommunityStatus();
   const {
     setEmergencyType,
     setStartMode,
@@ -127,6 +127,9 @@ export default function HomeScreen() {
     setSelectedInstitucion,
     setRouteProfile,
     setQuickRouteMode,
+    setPendingDestKind,
+    setPickingFromIsochroneMap,
+    setShowingInstitucionesOverlay,
   } = useRouteContext();
   const [sheetVisible, setSheetVisible] = useState(false);
   // Modales de "Durante la emergencia" levantados hasta Home para que
@@ -135,6 +138,7 @@ export default function HomeScreen() {
   const [safetyOpen, setSafetyOpen] = useState(false);
   const [familyOpen, setFamilyOpen] = useState(false);
   const [missingOpen, setMissingOpen] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
   const insets = useSafeAreaInsets();
 
   useFocusEffect(
@@ -150,24 +154,43 @@ export default function HomeScreen() {
     ]);
   };
 
-  // El sheet de evacuación rápida devuelve las dos decisiones juntas; acá
-  // setteamos contexto y navegamos con los params que gatillan el
-  // quickRoutePipeline (Case A con `autoRoute=1` para GPS, Case B con
-  // `autoOpen=pickStart` para manual + destinationMode=closest ya
-  // pre-seteado para que salte el Alert de método).
-  const handleQuickEvacuate = (
-    emergency: Exclude<EmergencyType, "ninguna">,
-    start: StartSource,
-  ) => {
+  // El sheet devuelve las 3 decisiones en un único payload. Según el
+  // destChoice:
+  //
+  //  · closest  → destinationMode=closest, auto-calc al confirmar origen.
+  //  · heatmap  → activa picker de isócronas en /map (vía pendingDestKind).
+  //  · instituciones → el sheet ya trae el item específico
+  //    (shelter/institucion) en el payload. Seteamos selectedDestination
+  //    o selectedInstitucion y destinationMode=manual para que Case A
+  //    (GPS) / CONFIRMAR PUNTO (manual) auto-calculen a ese destino.
+  //
+  // `pendingDestKind` sirve como memoria: MapViewContainer la lee al
+  // confirmar el punto de inicio manual para decidir qué hacer.
+  const handleQuickEvacuate = (p: ConfirmPayload) => {
     setSheetVisible(false);
-    setSelectedDestination(null);
-    setSelectedInstitucion(null);
-    setEmergencyType(emergency);
+    setSelectedDestination(p.shelter ?? null);
+    setSelectedInstitucion(p.institucion ?? null);
+    setEmergencyType(p.emergency);
     setRouteProfile("foot-walking");
-    setDestinationMode("closest");
     setQuickRouteMode(true);
     setStartPoint(null);
-    if (start === "gps") {
+
+    // Si el usuario escogió un item específico desde el selector de
+    // instituciones, el destino ya está resuelto — no hace falta
+    // disparar pickers en el mapa. Tratamos el pendingDestKind como
+    // "closest" para que Case A / CONFIRMAR dispare auto-calc directo
+    // contra el selected*.
+    const hasSpecific = p.shelter || p.institucion;
+    const effectiveKind = hasSpecific ? "closest" : p.destChoice === "locked" ? "closest" : p.destChoice;
+    setPendingDestKind(effectiveKind);
+    setDestinationMode(effectiveKind === "closest" ? (hasSpecific ? "manual" : "closest") : "manual");
+    // Los overlays de picker (isócronas / instituciones) se activan
+    // DESPUÉS, al confirmar el punto de inicio — no acá. Si los
+    // prendíamos aquí, el onPress del mapa manual quedaba bloqueado.
+    setPickingFromIsochroneMap(false);
+    setShowingInstitucionesOverlay(false);
+
+    if (p.start === "gps") {
       setStartMode("gps");
       router.push({ pathname: "/map", params: { autoRoute: "1" } });
     } else {
@@ -213,7 +236,26 @@ export default function HomeScreen() {
           {activeAlerts > 0 && (
             <TouchableOpacity
               style={styles.alertBar}
-              onPress={() => router.push("/community")}
+              onPress={() => {
+                // Tomamos la alerta "más caliente" (mayor supportCount)
+                // para centrar el mapa — si hay varias, el usuario casi
+                // siempre quiere ver la más crítica primero. Pasamos lat/lng
+                // + flag `showReports=1` al Visor para que active el
+                // heatmap y haga zoom al punto.
+                const hottest = [...alerts].sort(
+                  (a, b) => b.supportCount - a.supportCount,
+                )[0];
+                router.push({
+                  pathname: "/statistics",
+                  params: hottest
+                    ? {
+                        focusLat: String(hottest.lat),
+                        focusLng: String(hottest.lng),
+                        showReports: "1",
+                      }
+                    : {},
+                });
+              }}
               activeOpacity={0.8}
             >
               <MaterialIcons name="error" size={18} color="#fff" />
@@ -292,6 +334,19 @@ export default function HomeScreen() {
               </View>
               <Text style={styles.emergencyToolLabel}>Desaparecido</Text>
             </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.emergencyTool}
+              onPress={() => setReportOpen(true)}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel="Reportar un incidente ciudadano"
+            >
+              <View style={[styles.emergencyToolIcon, { backgroundColor: "#ffedd5" }]}>
+                <MaterialIcons name="report" size={22} color="#c2410c" />
+              </View>
+              <Text style={styles.emergencyToolLabel}>Reportar</Text>
+            </TouchableOpacity>
           </View>
 
           {/* ── VISOR — promovido de grid a CTA secundario ─────────────
@@ -343,12 +398,6 @@ export default function HomeScreen() {
                     size={28}
                     color={mod.color}
                   />
-                  {/* Badges específicos */}
-                  {mod.id === "community" && activeMissing > 0 && (
-                    <View style={styles.badge}>
-                      <Text style={styles.badgeText}>{activeMissing}</Text>
-                    </View>
-                  )}
                 </View>
                 <Text style={styles.gridTitle}>{mod.title}</Text>
                 <Text style={styles.gridSubtitle}>{mod.subtitle}</Text>
@@ -385,6 +434,8 @@ export default function HomeScreen() {
         visible={sheetVisible}
         onClose={() => setSheetVisible(false)}
         onConfirm={handleQuickEvacuate}
+        puntosEncuentro={puntosEncuentro}
+        instituciones={instituciones}
       />
       <SafetyStatusModal
         visible={safetyOpen}
@@ -398,6 +449,14 @@ export default function HomeScreen() {
       <MissingPersonsModal
         visible={missingOpen}
         onClose={() => setMissingOpen(false)}
+      />
+      <ReportModal
+        visible={reportOpen}
+        onClose={() => setReportOpen(false)}
+        onSubmitted={() => {
+          setReportOpen(false);
+          refresh({ recompute: true });
+        }}
       />
     </View>
   );

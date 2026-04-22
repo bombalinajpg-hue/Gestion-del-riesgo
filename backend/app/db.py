@@ -26,8 +26,25 @@ class Base(DeclarativeBase):
     """Base declarativa — todos los modelos heredan de acá."""
 
 
+def _normalize_async_url(url: str) -> str:
+    """Convierte URLs de Postgres síncronas a asyncpg.
+
+    Railway / Heroku / Render entregan `DATABASE_URL` como
+    `postgres://...` o `postgresql://...`, que SQLAlchemy interpreta
+    como driver síncrono psycopg2. Acá usamos el driver async `asyncpg`,
+    por lo que el scheme correcto es `postgresql+asyncpg://...`.
+    Transformarlo acá evita que el usuario tenga que saber esto al
+    configurar la variable en el dashboard del host.
+    """
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
+    if url.startswith("postgresql://") and "+asyncpg" not in url:
+        url = "postgresql+asyncpg://" + url[len("postgresql://"):]
+    return url
+
+
 engine = create_async_engine(
-    settings.database_url,
+    _normalize_async_url(settings.database_url),
     echo=settings.is_dev,          # en dev logueamos SQL para debug
     pool_pre_ping=True,            # reconecta si la DB se reinició
     pool_size=5,

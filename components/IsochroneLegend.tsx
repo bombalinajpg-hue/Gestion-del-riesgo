@@ -37,7 +37,11 @@ export default function IsochroneLegend() {
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: "rgba(255,255,255,0.95)",
+    // Transparente para que el mapa respire debajo de la leyenda —
+    // antes era casi opaca y tapaba los polígonos de amenaza junto al
+    // borde izquierdo. Mantenemos el texto legible con contraste
+    // fuerte + shadow.
+    backgroundColor: "rgba(255,255,255,0.7)",
     borderRadius: 14,
     paddingVertical: 6,
     paddingHorizontal: 10,
