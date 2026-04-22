@@ -28,7 +28,7 @@ import logging
 import secrets
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from geoalchemy2.functions import ST_AsGeoJSON
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -334,20 +334,31 @@ async def update_my_membership(
     )
 
 
-@router.delete("/{code}/members/me", status_code=204)
+@router.delete(
+    "/{code}/members/me",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
 async def leave_group(
     code: str,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> None:
+) -> Response:
     """Me salgo del grupo. Si era el owner y quedan otros miembros,
     el grupo sobrevive (queda huérfano pero funcional); si era el
-    último miembro, borramos el grupo."""
+    último miembro, borramos el grupo.
+
+    Devuelve 204 sin cuerpo — `Response` explícito es necesario porque
+    FastAPI valida al registrar rutas que no haya `response_model` con
+    status 204 (no-body). Sin `response_class=Response` el arranque
+    falla con `AssertionError: Status code 204 must not have a
+    response body`.
+    """
     group = await _get_group_by_code(db, code)
     my_membership = await _get_my_membership(db, group.id, user.id)
     if my_membership is None:
         # Idempotente: si ya saliste, 204 igual.
-        return None
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
     await db.delete(my_membership)
     await db.flush()
 
@@ -359,4 +370,4 @@ async def leave_group(
         await db.delete(group)
 
     await db.commit()
-    return None
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
