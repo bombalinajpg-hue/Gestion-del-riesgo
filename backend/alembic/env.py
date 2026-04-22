@@ -13,7 +13,7 @@ from logging.config import fileConfig
 
 from alembic import context
 from geoalchemy2 import alembic_helpers
-from sqlalchemy import engine_from_config, pool, text
+from sqlalchemy import engine_from_config, event, pool, text
 
 from app.config import settings
 from app.db import Base
@@ -58,11 +58,26 @@ def run_migrations_online() -> None:
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
+
+    # En Supabase, PostGIS vive en el schema `extensions`. Lo añadimos al
+    # search_path a nivel del DBAPI (psycopg2) apenas cada conexión se
+    # establece, ANTES de que SQLAlchemy/Alembic hagan cualquier cosa.
+    # Esto es a prueba de pool y de transacciones: sin esto, Alembic
+    # falla con `type "geometry" does not exist` al crear las tablas.
+    # El event se dispara en cada `connect()` físico del pool.
+    @event.listens_for(connectable, "connect")
+    def _set_search_path(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute("SET search_path TO public, extensions")
+        finally:
+            cursor.close()
+        dbapi_connection.commit()  # asegurar que el SET persiste
+
     with connectable.connect() as connection:
-        # En Supabase, PostGIS vive en el schema `extensions`. Lo
-        # añadimos al `search_path` apenas abre la conexión para que
-        # los `CREATE TABLE ... geometry(...)` encuentren el tipo.
-        # Sin esto, Alembic falla con `type "geometry" does not exist`.
+        # Redundante pero barato: ejecutar el SET también a nivel
+        # SQLAlchemy por si el event listener no disparó por alguna
+        # razón (ej. pool warmup previo).
         connection.execute(text("SET search_path TO public, extensions"))
         context.configure(
             connection=connection,
