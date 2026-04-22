@@ -49,6 +49,17 @@ engine = create_async_engine(
     pool_pre_ping=True,            # reconecta si la DB se reinició
     pool_size=5,
     max_overflow=10,
+    # En Supabase, PostGIS vive en el schema `extensions`. Sin este
+    # setting, el `search_path` de la sesión solo incluye `public` y
+    # las funciones/tipos de PostGIS (`geometry`, `ST_DWithin`, etc.)
+    # no son encontrados. `server_settings` se aplica cada vez que
+    # asyncpg abre una nueva conexión física, así que cubre tanto las
+    # conexiones directas como las que vienen del pooler de Supabase.
+    connect_args={
+        "server_settings": {
+            "search_path": "public, extensions",
+        },
+    },
 )
 
 SessionLocal = async_sessionmaker(

@@ -13,7 +13,7 @@ from logging.config import fileConfig
 
 from alembic import context
 from geoalchemy2 import alembic_helpers
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import engine_from_config, pool, text
 
 from app.config import settings
 from app.db import Base
@@ -59,6 +59,11 @@ def run_migrations_online() -> None:
         poolclass=pool.NullPool,
     )
     with connectable.connect() as connection:
+        # En Supabase, PostGIS vive en el schema `extensions`. Lo
+        # añadimos al `search_path` apenas abre la conexión para que
+        # los `CREATE TABLE ... geometry(...)` encuentren el tipo.
+        # Sin esto, Alembic falla con `type "geometry" does not exist`.
+        connection.execute(text("SET search_path TO public, extensions"))
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
