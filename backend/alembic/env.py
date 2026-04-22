@@ -7,13 +7,29 @@ Alembic corre en modo sync (no async), así que:
     para generar migraciones. Acá usamos psycopg2 implícito al quitar
     el `+asyncpg`.
   · Los modelos se importan para que autogenerate detecte cambios.
+
+Nota sobre el search_path + PostGIS en Supabase:
+  La extensión postgis vive en el schema `extensions`. Para que
+  `geometry(...)` sea encontrable sin prefijo, el search_path debe
+  incluir `extensions`. Esto se configura **a nivel de la base**:
+
+      ALTER DATABASE postgres SET search_path TO public, extensions;
+
+  Con eso, cada nueva conexión toma el search_path correcto desde
+  el arranque y Alembic no necesita hacer nada especial. No ponemos
+  un event listener ni un `SET search_path` acá porque:
+    1. No hace falta (el ALTER DATABASE cubre).
+    2. Si hacemos `commit()` o `SET` a destiempo rompemos los
+       `autocommit_block()` que usan las migraciones de ENUM
+       (`ALTER TYPE ... ADD VALUE`), que requieren una transacción
+       preexistente al entrar al bloque.
 """
 
 from logging.config import fileConfig
 
 from alembic import context
 from geoalchemy2 import alembic_helpers
-from sqlalchemy import engine_from_config, event, pool, text
+from sqlalchemy import engine_from_config, pool
 
 from app.config import settings
 from app.db import Base
@@ -58,27 +74,7 @@ def run_migrations_online() -> None:
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
-
-    # En Supabase, PostGIS vive en el schema `extensions`. Lo añadimos al
-    # search_path a nivel del DBAPI (psycopg2) apenas cada conexión se
-    # establece, ANTES de que SQLAlchemy/Alembic hagan cualquier cosa.
-    # Esto es a prueba de pool y de transacciones: sin esto, Alembic
-    # falla con `type "geometry" does not exist` al crear las tablas.
-    # El event se dispara en cada `connect()` físico del pool.
-    @event.listens_for(connectable, "connect")
-    def _set_search_path(dbapi_connection, connection_record):
-        cursor = dbapi_connection.cursor()
-        try:
-            cursor.execute("SET search_path TO public, extensions")
-        finally:
-            cursor.close()
-        dbapi_connection.commit()  # asegurar que el SET persiste
-
     with connectable.connect() as connection:
-        # Redundante pero barato: ejecutar el SET también a nivel
-        # SQLAlchemy por si el event listener no disparó por alguna
-        # razón (ej. pool warmup previo).
-        connection.execute(text("SET search_path TO public, extensions"))
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
