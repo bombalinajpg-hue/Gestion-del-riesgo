@@ -20,13 +20,12 @@
 
 import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { AuthProvider, useAuth } from "../context/AuthContext";
 import { RouteProvider, useRouteContext } from "../context/RouteContext";
-import { hasSeenOnboarding } from "../screens/OnboardingScreen";
 import { api } from "../src/services/api";
 import { clearMeCache } from "../src/services/apiMe";
 import { useMunicipio } from "../src/hooks/useMunicipio";
@@ -63,54 +62,21 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     prevUidRef.current = currentUid;
   }, [user?.uid, resetRouteContext]);
 
-  // Onboarding: tri-state para distinguir "aún cargando" vs "ya visto"
-  // vs "primer lanzamiento". Mientras es null pintamos splash para no
-  // flashear el Home antes de redirigir a /onboarding. El estado se
-  // resetea cuando cambia el usuario (logout → login de otra cuenta),
-  // así un usuario nuevo en el mismo dispositivo sí ve el onboarding.
-  const [onboardingSeen, setOnboardingSeen] = useState<boolean | null>(null);
-  useEffect(() => {
-    if (!user?.uid) {
-      setOnboardingSeen(null);
-      return;
-    }
-    let cancelled = false;
-    hasSeenOnboarding(user.uid).then((seen) => {
-      if (!cancelled) setOnboardingSeen(seen);
-    });
-    return () => { cancelled = true; };
-  }, [user?.uid]);
-
+  // Guard de sesión: el OnboardingScreen antiguo se retiró — la función
+  // de "intro" ahora la cumple el FirstRunGuide (modal sobre Home). Así
+  // el user logueado va directo a Home y ve el tour encima, sin el
+  // doble flash "login → onboarding screen → home" que era confuso.
   const inAuthScreen = segments[0] === "login";
-  const inOnboardingScreen = segments[0] === "onboarding";
-  // El onboarding se muestra DESPUÉS del login — una vez la sesión está
-  // resuelta y antes de cualquier pantalla autenticada. Así el copy
-  // puede personalizarse (y no se muestra a usuarios que ya se habían
-  // logueado antes con AsyncStorage conservado).
-  const needsRedirectToLogin = !loading && !user && !inAuthScreen && !inOnboardingScreen;
+  const needsRedirectToLogin = !loading && !user && !inAuthScreen;
   const needsRedirectToHome = !loading && !!user && inAuthScreen;
-  const needsRedirectToOnboarding =
-    !loading && !!user && onboardingSeen === false && !inOnboardingScreen && !inAuthScreen;
-  const needsRedirectAwayFromOnboarding =
-    !loading && !!user && onboardingSeen === true && inOnboardingScreen;
 
   useEffect(() => {
     if (needsRedirectToLogin) {
       router.replace("/login");
-    } else if (needsRedirectToOnboarding) {
-      router.replace("/onboarding");
-    } else if (needsRedirectAwayFromOnboarding) {
-      router.replace("/");
     } else if (needsRedirectToHome) {
       router.replace("/");
     }
-  }, [
-    needsRedirectToLogin,
-    needsRedirectToHome,
-    needsRedirectToOnboarding,
-    needsRedirectAwayFromOnboarding,
-    router,
-  ]);
+  }, [needsRedirectToLogin, needsRedirectToHome, router]);
 
   // Sync con el backend: cuando el user queda logueado, disparamos un
   // `GET /v1/me` para que el backend haga el upsert del user en la DB.
@@ -126,15 +92,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 
   // Mientras se resuelve la sesión O se redirige, pintamos splash.
   // Esto evita el flash del Home antes de llegar al login (y viceversa).
-  // `onboardingSeen === null` significa "aún no leímos AsyncStorage".
-  if (
-    loading ||
-    onboardingSeen === null ||
-    needsRedirectToLogin ||
-    needsRedirectToHome ||
-    needsRedirectToOnboarding ||
-    needsRedirectAwayFromOnboarding
-  ) {
+  if (loading || needsRedirectToLogin || needsRedirectToHome) {
     return (
       <View style={styles.splash}>
         <ActivityIndicator size="large" color="#ef476f" />
@@ -157,9 +115,11 @@ export default function RootLayout() {
                 animation: "slide_from_right",
               }}
             >
-              <Stack.Screen name="index" />
+              <Stack.Screen name="index" options={{ animation: "fade" }} />
               <Stack.Screen name="login" options={{ animation: "fade" }} />
               <Stack.Screen name="onboarding" options={{ animation: "fade" }} />
+              <Stack.Screen name="visor" options={{ animation: "fade" }} />
+              <Stack.Screen name="cuenta" options={{ animation: "fade" }} />
               <Stack.Screen name="map" />
               <Stack.Screen name="emergency" />
               <Stack.Screen name="training" />

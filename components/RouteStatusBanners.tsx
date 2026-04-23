@@ -52,7 +52,7 @@ export default function RouteStatusBanners({
         <View style={styles.pickingBanner}>
           <MaterialIcons name="touch-app" size={18} color="#fff" />
           <Text style={styles.pickingBannerText}>
-            Toca un refugio en el mapa para elegirlo
+            Toca un punto de encuentro en el mapa para elegirlo
           </Text>
         </View>
       </View>
@@ -133,9 +133,10 @@ const styles = StyleSheet.create({
     backgroundColor: "#10b981",
     paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20,
     flexDirection: "row", alignItems: "center", gap: 8,
+    maxWidth: "90%",
     elevation: 8, shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 8,
   },
-  pickingBannerText: { color: "#fff", fontWeight: "700", fontSize: 13 },
+  pickingBannerText: { color: "#fff", fontWeight: "700", fontSize: 13, flexShrink: 1 },
   statusBanner: {
     backgroundColor: "#073b4c",
     paddingHorizontal: 18, paddingVertical: 10, borderRadius: 20,

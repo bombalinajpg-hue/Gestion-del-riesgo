@@ -30,6 +30,8 @@ import {
 } from 'react-native';
 import type { ReportSeverity, ReportType } from '../src/types/graph';
 import { submitReport } from '../src/services/reportsService';
+import { useAuth } from '../context/AuthContext';
+import EmailVerificationGate from './EmailVerificationGate';
 
 interface Props {
   visible: boolean;
@@ -51,8 +53,8 @@ const TYPE_OPTIONS: TypeOption[] = [
   { value: 'inundacion_local', label: 'Inundación puntual', icon: 'water', color: '#2563eb' },
   { value: 'deslizamiento_local', label: 'Deslizamiento', icon: 'landscape', color: '#7c2d12' },
   { value: 'riesgo_electrico', label: 'Riesgo eléctrico', icon: 'flash-on', color: '#f59e0b' },
-  { value: 'refugio_saturado', label: 'Refugio saturado', icon: 'people', color: '#9333ea' },
-  { value: 'refugio_cerrado', label: 'Refugio cerrado', icon: 'lock', color: '#6b7280' },
+  { value: 'refugio_saturado', label: 'Punto de encuentro saturado', icon: 'people', color: '#9333ea' },
+  { value: 'refugio_cerrado', label: 'Punto de encuentro cerrado', icon: 'lock', color: '#6b7280' },
   { value: 'otro', label: 'Otro incidente', icon: 'more-horiz', color: '#475569' },
 ];
 
@@ -68,6 +70,7 @@ export default function ReportModal({
   onSubmitted,
   initialLocation,
 }: Props) {
+  const { user } = useAuth();
   const [selectedType, setSelectedType] = useState<ReportType | null>(null);
   const [selectedSeverity, setSelectedSeverity] = useState<ReportSeverity | null>(null);
   const [note, setNote] = useState('');
@@ -281,6 +284,15 @@ export default function ReportModal({
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <View style={styles.overlay}>
+        {!user?.emailVerified ? (
+          <View style={styles.sheet}>
+            <EmailVerificationGate
+              title="Reportar incidente"
+              action="enviar reportes ciudadanos"
+              onClose={onClose}
+            />
+          </View>
+        ) : (
         <View style={styles.sheet}>
           {/* Handle visual de "arrastre" */}
           <View style={styles.grabber} />
@@ -487,6 +499,7 @@ export default function ReportModal({
             </Text>
           </TouchableOpacity>
         </View>
+        )}
       </View>
     </Modal>
   );

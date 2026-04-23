@@ -22,7 +22,7 @@ const BANDS = [
 export default function IsochroneLegend() {
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>min al refugio</Text>
+      <Text style={styles.title}>min al punto de encuentro</Text>
       <View style={styles.row}>
         {BANDS.map((b) => (
           <View key={b.label} style={styles.item}>

@@ -1,0 +1,65 @@
+{
+  "generadoEn": "2026-04-23T00:16:51.066Z",
+  "N": 50,
+  "emergencias": [
+    "inundacion",
+    "avenida_torrencial",
+    "movimiento_en_masa"
+  ],
+  "comparacion": {
+    "inundacion": {
+      "base": {
+        "rutas": 49,
+        "fails": 1,
+        "duracionMediaMin": 36.57,
+        "distanciaMediaM": 2732,
+        "pctRutasCruzandoElementosAlta": 0,
+        "pctRutasCruzandoObraAlta": 18.4
+      },
+      "catas": {
+        "rutas": 49,
+        "fails": 1,
+        "duracionMediaMin": 43.52,
+        "distanciaMediaM": 2756,
+        "pctRutasCruzandoElementosAlta": 0,
+        "pctRutasCruzandoObraAlta": 12.2
+      }
+    },
+    "avenida_torrencial": {
+      "base": {
+        "rutas": 47,
+        "fails": 3,
+        "duracionMediaMin": 42.64,
+        "distanciaMediaM": 3205,
+        "pctRutasCruzandoElementosAlta": 19.1,
+        "pctRutasCruzandoObraAlta": 19.1
+      },
+      "catas": {
+        "rutas": 47,
+        "fails": 3,
+        "duracionMediaMin": 50.65,
+        "distanciaMediaM": 3228,
+        "pctRutasCruzandoElementosAlta": 8.5,
+        "pctRutasCruzandoObraAlta": 8.5
+      }
+    },
+    "movimiento_en_masa": {
+      "base": {
+        "rutas": 49,
+        "fails": 1,
+        "duracionMediaMin": 37.54,
+        "distanciaMediaM": 2837,
+        "pctRutasCruzandoElementosAlta": 0,
+        "pctRutasCruzandoObraAlta": 12.2
+      },
+      "catas": {
+        "rutas": 49,
+        "fails": 1,
+        "duracionMediaMin": 44.63,
+        "distanciaMediaM": 2845,
+        "pctRutasCruzandoElementosAlta": 0,
+        "pctRutasCruzandoObraAlta": 10.2
+      }
+    }
+  }
+}

@@ -41,6 +41,8 @@ import {
 import { getDeviceId } from '../src/services/reportsService';
 import type { MissingPerson } from '../src/types/v4';
 import { isValidPhone } from '../src/utils/validation';
+import { useAuth } from '../context/AuthContext';
+import EmailVerificationGate from './EmailVerificationGate';
 
 interface Props {
   visible: boolean;
@@ -50,6 +52,7 @@ interface Props {
 type View_ = 'list' | 'report';
 
 export default function MissingPersonsModal({ visible, onClose }: Props) {
+  const { user } = useAuth();
   const [view, setView] = useState<View_>('list');
   const [missing, setMissing] = useState<MissingPerson[]>([]);
   const [myDeviceId, setMyDeviceId] = useState<string>('');
@@ -110,6 +113,12 @@ export default function MissingPersonsModal({ visible, onClose }: Props) {
             myDeviceId={myDeviceId}
             onReload={reload}
             onNewReport={() => setView('report')}
+          />
+        ) : !user?.emailVerified ? (
+          <EmailVerificationGate
+            title="Reportar desaparecido"
+            action="reportar una persona desaparecida"
+            onClose={() => setView('list')}
           />
         ) : (
           <ReportForm onSubmitted={async () => { await reload(); setView('list'); }} />

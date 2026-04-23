@@ -68,8 +68,10 @@ export async function computeRoute(
   const startNodeId = graph.nodes[startIdx].id;
 
   // Cargar bloqueos ciudadanos desde el servicio de reportes.
-  // Esto es lo que materializa el objetivo 2: reportes → afectan el ruteo.
-  const blockedEdgeIds = await getAllBlockedEdgeIds(graph);
+  // Esto es lo que materializa el objetivo 4 del anteproyecto:
+  // personalización por tipo de emergencia → solo las alertas
+  // pertinentes al fenómeno activo penalizan aristas.
+  const blockedEdgeIds = await getAllBlockedEdgeIds(graph, params.emergencyType);
 
   // Si hay destinos alternativos, elige el óptimo (modo "closest").
   // Por simplicidad elegimos el más cercano por Haversine y lo ruteamos.
@@ -82,6 +84,13 @@ export async function computeRoute(
   const hazardPenaltyOpts =
     params.emergencyType !== 'ninguna'
       ? { ...DEFAULT_HAZARD_PENALTIES[params.emergencyType], emergencyType: params.emergencyType }
+      : undefined;
+  // Factores catastrales (4A + 4B): solo se activan cuando hay emergencia.
+  // Los multiplicadores específicos los define catastroCostFactors con
+  // defaults conservadores (tope 4×). Solo afectan al perfil peatonal.
+  const catastroPenaltyOpts =
+    params.emergencyType !== 'ninguna'
+      ? { emergencyType: params.emergencyType }
       : undefined;
 
   // Corre el algoritmo elegido contra todos los candidatos y devuelve el
@@ -99,12 +108,14 @@ export async function computeRoute(
           profile: params.profile,
           blockedEdgeIds,
           hazardPenalty: hazardPenaltyOpts,
+          catastroPenalty: catastroPenaltyOpts,
         });
       } else if (algo === 'a-star') {
         result = aStar(graph, startNodeId, endNodeId, {
           profile: params.profile,
           blockedEdgeIds,
           hazardPenalty: hazardPenaltyOpts,
+          catastroPenalty: catastroPenaltyOpts,
         });
       } else if (algo === 'time-dependent') {
         if (params.emergencyType === 'ninguna') {
@@ -128,6 +139,7 @@ export async function computeRoute(
             departureTimeSeconds: params.departureTimeSeconds ?? 0,
             edgeCostAt,
             blockedEdgeIds,
+            catastroPenalty: catastroPenaltyOpts,
           });
         }
       }

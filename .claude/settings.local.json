@@ -2,7 +2,11 @@
   "permissions": {
     "allow": [
       "Bash(npm list *)",
-      "Bash(npx tsc *)"
+      "Bash(npx tsc *)",
+      "Bash(awk '/const styles = StyleSheet.create/,/\\\\}\\\\\\);/' \"c:\\\\proyectos\\\\rutas/components/MapViewContainer.tsx\")",
+      "Bash(sed 's/://; s/^ //')",
+      "Bash(grep \"styles\\\\\\\\.\" \"c:\\\\proyectos\\\\rutas/components/MapViewContainer.tsx\")",
+      "Bash(grep -oE \"styles\\\\\\\\.[a-zA-Z][a-zA-Z0-9]*\")"
     ]
   }
 }

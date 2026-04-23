@@ -44,6 +44,7 @@ import type {
   HazardCategory,
 } from '../types/graph';
 import { MinHeap } from './MinHeap';
+import { catastroEdgeMultiplier, type CatastroPenaltyOpts } from './catastroCostFactors';
 
 export interface MultiSourceOptions {
   profile: RouteProfile;
@@ -56,6 +57,8 @@ export interface MultiSourceOptions {
   hazardPenalty?: Partial<Record<HazardCategory, number>>;
   /** Aristas bloqueadas dinámicamente */
   blockedEdgeIds?: Set<number>;
+  /** Factores catastrales (4A + 4B). Opcional. */
+  catastroPenalty?: CatastroPenaltyOpts;
 }
 
 /**
@@ -111,6 +114,11 @@ export function multiSourceDijkstra(
         } else {
           weight *= mult;
         }
+      }
+
+      // Factores catastrales (4A+4B) — solo cuando hay emergencia activa.
+      if (opts.catastroPenalty) {
+        weight *= catastroEdgeMultiplier(edge, opts.profile, opts.catastroPenalty);
       }
 
       const v = graph.idToIndex[edge.to];

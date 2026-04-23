@@ -21,7 +21,7 @@
  */
 
 import { MaterialIcons } from "@expo/vector-icons";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Dimensions,
   Modal,
@@ -102,7 +102,7 @@ interface DestOption {
 //  · instituciones → despliega lista mezclada de instituciones y puntos
 //    de encuentro para elegir uno específico.
 const DESTS: DestOption[] = [
-  { value: "closest", label: "Refugio más cercano", icon: "near-me", description: "Auto: el más seguro" },
+  { value: "closest", label: "Punto de encuentro más cercano", icon: "near-me", description: "Auto: el más seguro" },
   { value: "heatmap", label: "Elegir en el mapa", icon: "layers", description: "Con mapa de tiempos" },
   { value: "instituciones", label: "Institución o punto de encuentro", icon: "local-hospital", description: "Elige uno de la lista" },
 ];
@@ -131,19 +131,24 @@ export default function QuickEvacuateSheet({
 }: Props) {
   const insets = useSafeAreaInsets();
   const [emergency, setEmergency] = useState<HazardKey | null>(null);
-  const [start, setStart] = useState<StartSource | null>(null);
-  const [dest, setDest] = useState<DestChoice | null>(null);
+  // Defaults sensatos para minimizar taps durante emergencia real:
+  //   · start = "gps"      → asumimos que el usuario está donde reporta
+  //   · dest  = "closest"  → el algoritmo elige el punto más seguro
+  // En emergencia, cada tap de más es riesgo. El usuario puede cambiar
+  // estos defaults si quiere, pero para la mayoría no es necesario.
+  const [start, setStart] = useState<StartSource | null>("gps");
+  const [dest, setDest] = useState<DestChoice | null>("closest");
   // Item específico elegido del selector cuando dest === "instituciones".
   const [chosenShelter, setChosenShelter] = useState<Destino | null>(null);
   const [chosenInstitucion, setChosenInstitucion] = useState<Institucion | null>(null);
 
-  // Al cerrar y reabrir, queremos estado limpio — si el usuario vio la
-  // hoja a medio llenar y cerró, no debería encontrarla igual al volver.
+  // Al cerrar y reabrir volvemos a los defaults — no dejamos la última
+  // selección de emergencia pero sí los defaults de start y dest.
   useEffect(() => {
     if (!visible) {
       setEmergency(null);
-      setStart(null);
-      setDest(null);
+      setStart("gps");
+      setDest("closest");
       setChosenShelter(null);
       setChosenInstitucion(null);
     }
@@ -208,6 +213,22 @@ export default function QuickEvacuateSheet({
     });
   };
 
+  // Scroll automático al botón "Empezar" cuando se puede confirmar — así
+  // el usuario ve inmediatamente el CTA sin tener que buscarlo con scroll
+  // manual. Solo dispara en la transición false→true para no hacer ping-pong.
+  const scrollRef = useRef<ScrollView>(null);
+  const prevCanConfirmRef = useRef(false);
+  useEffect(() => {
+    if (canConfirm && !prevCanConfirmRef.current) {
+      const t = setTimeout(() => {
+        scrollRef.current?.scrollToEnd({ animated: true });
+      }, 250);
+      prevCanConfirmRef.current = true;
+      return () => clearTimeout(t);
+    }
+    if (!canConfirm) prevCanConfirmRef.current = false;
+  }, [canConfirm]);
+
   // Cap del sheet: no puede pasar del safe-area top menos un margen
   // (para que el handle siempre sea visible). En Android sin notch los
   // insets.top pueden venir en 0: usamos un fallback fijo de 24.
@@ -247,12 +268,13 @@ export default function QuickEvacuateSheet({
               <Text style={styles.subtitle}>
                 {locked
                   ? `Destino fijo: ${lockedDestination?.name}`
-                  : "Te llevamos al refugio más seguro y cercano"}
+                  : "Te llevamos al punto de encuentro más seguro y cercano"}
               </Text>
             </View>
           </View>
 
           <ScrollView
+            ref={scrollRef}
             style={styles.scroll}
             contentContainerStyle={styles.scrollContent}
             showsVerticalScrollIndicator={false}
@@ -281,8 +303,26 @@ export default function QuickEvacuateSheet({
               })}
             </View>
 
-            <Text style={styles.sectionTitle}>2. ¿Desde dónde sales?</Text>
-            <View style={styles.row}>
+            <Text
+              style={[
+                styles.sectionTitle,
+                emergency === null && styles.sectionTitleDisabled,
+              ]}
+            >
+              2. ¿Desde dónde sales?
+            </Text>
+            {emergency === null && (
+              <View style={styles.helperMessage}>
+                <MaterialIcons name="info-outline" size={14} color="#0f766e" />
+                <Text style={styles.helperMessageText}>
+                  Selecciona un tipo de emergencia para continuar
+                </Text>
+              </View>
+            )}
+            <View
+              style={[styles.row, emergency === null && { opacity: 0.45 }]}
+              pointerEvents={emergency === null ? "none" : "auto"}
+            >
               {STARTS.map((opt) => {
                 const selected = start === opt.value;
                 return (
@@ -339,8 +379,40 @@ export default function QuickEvacuateSheet({
               </>
             ) : (
               <>
-                <Text style={styles.sectionTitle}>3. ¿A qué destino?</Text>
-                <View style={styles.destCol}>
+                <Text
+                  style={[
+                    styles.sectionTitle,
+                    (emergency === null || start === null) &&
+                      styles.sectionTitleDisabled,
+                  ]}
+                >
+                  3. ¿A qué destino?
+                </Text>
+                {emergency === null && (
+                  <View style={styles.helperMessage}>
+                    <MaterialIcons name="info-outline" size={14} color="#0f766e" />
+                    <Text style={styles.helperMessageText}>
+                      Selecciona un tipo de emergencia para continuar
+                    </Text>
+                  </View>
+                )}
+                {emergency !== null && start === null && (
+                  <View style={styles.helperMessage}>
+                    <MaterialIcons name="info-outline" size={14} color="#0f766e" />
+                    <Text style={styles.helperMessageText}>
+                      Selecciona un punto de partida para continuar
+                    </Text>
+                  </View>
+                )}
+                <View
+                  style={[
+                    styles.destCol,
+                    (emergency === null || start === null) && { opacity: 0.45 },
+                  ]}
+                  pointerEvents={
+                    emergency === null || start === null ? "none" : "auto"
+                  }
+                >
                   {DESTS.map((opt) => {
                     const selected = dest === opt.value;
                     return (
@@ -530,6 +602,28 @@ const styles = StyleSheet.create({
     color: "#0f172a",
     marginTop: 18,
     marginBottom: 8,
+  },
+  sectionTitleDisabled: {
+    color: "#94a3b8",
+  },
+  // Mensaje contextual que reemplaza el "apagado" puro cuando el usuario
+  // aún no ha cumplido un prerequisito (ej: elegir emergencia). Comunica
+  // QUÉ falta, no solo que está deshabilitado.
+  helperMessage: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "#ecfdf5",
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginBottom: 8,
+  },
+  helperMessageText: {
+    flex: 1,
+    fontSize: 12,
+    color: "#0f766e",
+    fontWeight: "600",
   },
   row: {
     flexDirection: "row",

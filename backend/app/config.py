@@ -39,6 +39,14 @@ class Settings(BaseSettings):
     # CORS — lista separada por coma, parseada en middleware.
     cors_origins: str = "*"
 
+    # Secret para proteger endpoints de admin / ops (ej. /alerts/recompute).
+    # No es un sistema de roles — es un "pre-shared key" simple: el cliente
+    # envía header `X-Admin-Secret: <valor>` y el backend lo compara. Si no
+    # está configurado (None), los endpoints protegidos responden 403 a
+    # todos, lo que es el default más seguro. Para habilitar, poner la
+    # variable `ADMIN_SECRET` en Railway con un string largo aleatorio.
+    admin_secret: str | None = None
+
     @property
     def is_dev(self) -> bool:
         return self.app_env == "development"

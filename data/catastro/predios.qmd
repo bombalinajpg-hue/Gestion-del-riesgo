@@ -1,0 +1,39 @@
+<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 'SYSTEM'>
+<qgis version="3.44.0-Solothurn">
+  <identifier>Predios</identifier>
+  <parentidentifier></parentidentifier>
+  <language>SPA</language>
+  <type>dataset</type>
+  <title>Terreno Urbano</title>
+  <abstract>Corresponde a la capa de información de terrenos urbanos para el área de estudio a escala 1:2000. Para la cabecera municipal de Santa Rosa de Cabal y los centros poblados de El Español, La Florida, Lembo, Guacas, Jazmín, Santa Barbara, Las Mangas, San José y La Capilla , departamento de Risaralda. Capa obtenida a partir de insumos secundarios de la base de datos catastral de la oficina Catastral de Santa Rosa de Cabal, actualizada para el año 2018.
+
+Capa de información de "Terreno Urbano". Fortalecimiento de las herramientas de planificación para el ordenamiento territorial de los municipios del departamento de Risaralda. Escala 1:2.000. Año 2022. </abstract>
+  <keywords vocabulary="Buscar claves">
+    <keyword>Estudios detallados</keyword>
+    <keyword>Santa Rosa de Cabal</keyword>
+    <keyword>Risaralda</keyword>
+    <keyword>gestion del riesgo</keyword>
+  </keywords>
+  <links/>
+  <dates/>
+  <fees></fees>
+  <constraints type="Limitaciones de uso">El uso y distribución de esta información esta restringido a partir de la previa autorización de Aldesarrollo y/o la alcaldía municipal.</constraints>
+  <rights>Catastro Santa Rosa de Cabal, Aldesarrollo</rights>
+  <encoding></encoding>
+  <crs>
+    <spatialrefsys nativeFormat="Wkt">
+      <wkt></wkt>
+      <proj4></proj4>
+      <srsid>0</srsid>
+      <srid>0</srid>
+      <authid></authid>
+      <description></description>
+      <projectionacronym></projectionacronym>
+      <ellipsoidacronym></ellipsoidacronym>
+      <geographicflag>false</geographicflag>
+    </spatialrefsys>
+  </crs>
+  <extent>
+    <spatial miny="4.8712629999999999" minz="0" maxy="4.88469200000000026" maxz="0" maxx="-75.6254030000000057" crs="EPSG:4326" minx="-75.63118599999999958" dimensions="2"/>
+  </extent>
+</qgis>

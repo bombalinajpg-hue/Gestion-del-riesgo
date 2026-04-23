@@ -1,0 +1,34 @@
+{
+  "graph": {
+    "nodes": 6538,
+    "edges": 13363,
+    "area": "Santa Rosa de Cabal",
+    "source": "overpass"
+  },
+  "benchmark": {
+    "iterations": 200,
+    "profile": "foot-walking",
+    "algorithm": "dijkstra",
+    "totalElapsedSec": 0.086
+  },
+  "success": {
+    "rate": 0.96,
+    "total": 200,
+    "successful": 192,
+    "failed": 8
+  },
+  "latencyMs": {
+    "mean": 0.427,
+    "p50": 0.342,
+    "p90": 0.693,
+    "p95": 0.789,
+    "p99": 2.458,
+    "min": 0.02,
+    "max": 6.654
+  },
+  "routeDurationSec": {
+    "meanMinutes": 35.66,
+    "p50Minutes": 31.17,
+    "p95Minutes": 80.56
+  }
+}

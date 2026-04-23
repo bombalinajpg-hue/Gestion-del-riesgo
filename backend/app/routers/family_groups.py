@@ -28,7 +28,7 @@ import logging
 import secrets
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from geoalchemy2.functions import ST_AsGeoJSON
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -37,6 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import get_current_user
 from app.db import get_db
 from app.models import FamilyGroup, GroupMember, MemberStatus, User
+from app.rate_limit import limiter
 from app.schemas import (
     GroupDetail,
     GroupIn,
@@ -128,7 +129,9 @@ async def _load_members(
 # ─── Endpoints ──────────────────────────────────────────────────────
 
 @router.post("", response_model=GroupDetail, status_code=201)
+@limiter.limit("10/minute")
 async def create_group(
+    request: Request,
     payload: GroupIn,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -188,7 +191,9 @@ async def create_group(
 
 
 @router.post("/join", response_model=GroupDetail)
+@limiter.limit("20/minute")
 async def join_group(
+    request: Request,
     payload: GroupJoinIn,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -281,7 +286,9 @@ async def group_detail(
 
 
 @router.patch("/{code}/members/me", response_model=MemberOut)
+@limiter.limit("60/minute")
 async def update_my_membership(
+    request: Request,
     code: str,
     payload: MemberLocationUpdate,
     user: User = Depends(get_current_user),
@@ -292,6 +299,12 @@ async def update_my_membership(
     Este es el endpoint que se dispara cada vez que el usuario toca
     "Compartir mi ubicación" o cambia su `SafetyStatus`. Los otros
     miembros ven el cambio al hacer GET /{code}.
+
+    Validación geográfica: si el municipio del grupo tiene `bbox`
+    configurado, se verifica que la ubicación reportada caiga dentro
+    de él. Sin esto, un cliente malicioso podría publicar coordenadas
+    arbitrarias (GPS spoofing) y contaminar el mapa familiar. Si el
+    municipio no tiene bbox (data legacy), se deja pasar con warning.
     """
     group = await _get_group_by_code(db, code)
     my_membership = await _get_my_membership(db, group.id, user.id)
@@ -302,6 +315,44 @@ async def update_my_membership(
         )
 
     if payload.location is not None:
+        # Validación geo: la ubicación debe caer dentro del bbox del
+        # municipio del grupo. Usamos ST_Contains contra la geometría
+        # almacenada en `municipios.bbox`. Un solo round-trip por PATCH.
+        from geoalchemy2.functions import ST_Contains, ST_MakePoint, ST_SetSRID
+        from app.models import Municipio
+
+        bbox_row = await db.execute(
+            select(
+                Municipio.bbox,
+                ST_Contains(
+                    Municipio.bbox,
+                    ST_SetSRID(ST_MakePoint(payload.location.lng, payload.location.lat), 4326),
+                ).label("inside"),
+            ).where(Municipio.id == group.municipio_id)
+        )
+        row = bbox_row.one_or_none()
+        if row is None:
+            # Municipio no existe — no debería pasar porque `group`
+            # ya lo referencia, pero defensivamente devolvemos 422.
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="El municipio del grupo no está disponible.",
+            )
+        bbox_geom, inside = row
+        if bbox_geom is None:
+            log.warning(
+                "Municipio %s no tiene bbox — no se valida la ubicación reportada.",
+                group.municipio_id,
+            )
+        elif not inside:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "La ubicación reportada está fuera del área del "
+                    "municipio del grupo. Verifica que tu GPS esté "
+                    "activado y no esté siendo simulado."
+                ),
+            )
         my_membership.last_location = _point_wkt(  # type: ignore[assignment]
             payload.location.lat, payload.location.lng,
         )

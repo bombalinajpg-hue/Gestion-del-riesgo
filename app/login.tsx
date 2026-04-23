@@ -11,12 +11,13 @@
  * usuario no pueda "volver" al login con el back button.
  */
 
-import { MaterialIcons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Image,
+  ImageBackground,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -36,7 +37,9 @@ export default function LoginScreen() {
   const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [displayName, setDisplayName] = useState("");
+  const [passwordConfirm, setPasswordConfirm] = useState("");
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   // Si ya hay sesión (p. ej. abriste la app y Firebase restauró la sesión
@@ -47,9 +50,28 @@ export default function LoginScreen() {
     }
   }, [user, router]);
 
+  // Validación local ANTES de Firebase — sin esto, contraseñas cortas
+  // caían en el error genérico de Firebase "auth/weak-password" y el
+  // usuario veía "correo o contraseña incorrectos", confuso.
+  const validateInputs = (): string | null => {
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail) return "Ingresa tu correo electrónico.";
+    const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail);
+    if (!emailOk) return "El correo no parece válido. Revisa el formato.";
+    if (!password) return "Ingresa tu contraseña.";
+    if (mode === "signup") {
+      if (password.length < 6) return "La contraseña debe tener mínimo 6 caracteres.";
+      if (password !== passwordConfirm) return "Las contraseñas no coinciden.";
+      if (!firstName.trim()) return "Ingresa tu nombre.";
+      if (!lastName.trim()) return "Ingresa tu apellido.";
+    }
+    return null;
+  };
+
   const submit = async () => {
-    if (!email.trim() || !password) {
-      Alert.alert("Faltan datos", "Completa correo y contraseña.");
+    const validationError = validateInputs();
+    if (validationError) {
+      Alert.alert("Revisa los datos", validationError);
       return;
     }
     setSubmitting(true);
@@ -57,9 +79,17 @@ export default function LoginScreen() {
       if (mode === "signin") {
         await signIn(email.trim(), password);
       } else {
-        await signUp(email.trim(), password, displayName.trim() || undefined);
+        const fullName = `${firstName.trim()} ${lastName.trim()}`.trim();
+        await signUp(email.trim(), password, fullName || undefined);
+        // Tras signup el usuario queda logueado y el useEffect de
+        // `user` lo empuja al Home. La verificación del correo NO
+        // bloquea el acceso: solo se pedirá al intentar enviar un
+        // reporte ciudadano (ReportModal / MissingPersonsModal).
+        Alert.alert(
+          "Cuenta creada",
+          `Te enviamos un correo de verificación a ${email.trim()}. Necesitarás confirmarlo para enviar reportes ciudadanos; el resto de la app está disponible ahora.`,
+        );
       }
-      // El useEffect de `user` se encarga del router.replace.
     } catch (e) {
       Alert.alert(
         mode === "signin" ? "No se pudo iniciar sesión" : "No se pudo crear la cuenta",
@@ -73,7 +103,12 @@ export default function LoginScreen() {
   const isSignup = mode === "signup";
 
   return (
-    <SafeAreaView style={styles.root} edges={["top", "bottom"]}>
+    <ImageBackground
+      source={require("../assets/images/brand/login-background.png")}
+      style={styles.bg}
+      resizeMode="cover"
+    >
+      <SafeAreaView style={styles.root} edges={["top", "bottom"]}>
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
@@ -83,12 +118,12 @@ export default function LoginScreen() {
           keyboardShouldPersistTaps="handled"
         >
           <View style={styles.hero}>
-            <View style={styles.logoBadge}>
-              <MaterialIcons name="shield" size={32} color="#fff" />
-            </View>
-            <Text style={styles.title}>
-              Evacu<Text style={{ color: "#ffd166" }}>App</Text>
-            </Text>
+            <Image
+              source={require("../assets/images/brand/brand-logotipo.png")}
+              style={styles.brandLogo}
+              resizeMode="contain"
+              accessibilityLabel="EvacuApp"
+            />
             <Text style={styles.subtitle}>
               {isSignup ? "Crea tu cuenta" : "Inicia sesión para continuar"}
             </Text>
@@ -96,18 +131,32 @@ export default function LoginScreen() {
 
           <View style={styles.card}>
             {isSignup && (
-              <View style={styles.field}>
-                <Text style={styles.label}>Nombre (opcional)</Text>
-                <TextInput
-                  style={styles.input}
-                  value={displayName}
-                  onChangeText={setDisplayName}
-                  placeholder="Tu nombre"
-                  placeholderTextColor="#94a3b8"
-                  autoCapitalize="words"
-                  autoComplete="name"
-                />
-              </View>
+              <>
+                <View style={styles.field}>
+                  <Text style={styles.label}>Nombre</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={firstName}
+                    onChangeText={setFirstName}
+                    placeholder="Tu nombre"
+                    placeholderTextColor="#94a3b8"
+                    autoCapitalize="words"
+                    autoComplete="given-name"
+                  />
+                </View>
+                <View style={styles.field}>
+                  <Text style={styles.label}>Apellido</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={lastName}
+                    onChangeText={setLastName}
+                    placeholder="Tu apellido"
+                    placeholderTextColor="#94a3b8"
+                    autoCapitalize="words"
+                    autoComplete="family-name"
+                  />
+                </View>
+              </>
             )}
 
             <View style={styles.field}>
@@ -138,6 +187,22 @@ export default function LoginScreen() {
                 autoComplete={isSignup ? "new-password" : "current-password"}
               />
             </View>
+
+            {isSignup && (
+              <View style={styles.field}>
+                <Text style={styles.label}>Confirmar contraseña</Text>
+                <TextInput
+                  style={styles.input}
+                  value={passwordConfirm}
+                  onChangeText={setPasswordConfirm}
+                  placeholder="Repite tu contraseña"
+                  placeholderTextColor="#94a3b8"
+                  secureTextEntry
+                  autoCapitalize="none"
+                  autoComplete="new-password"
+                />
+              </View>
+            )}
 
             <TouchableOpacity
               style={[styles.primary, submitting && { opacity: 0.6 }]}
@@ -172,30 +237,27 @@ export default function LoginScreen() {
           </Text>
         </ScrollView>
       </KeyboardAvoidingView>
-    </SafeAreaView>
+      </SafeAreaView>
+    </ImageBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: "#073b4c" },
+  bg: { flex: 1 },
+  root: { flex: 1 },
   scroll: { flexGrow: 1, padding: 20, justifyContent: "center" },
-  hero: { alignItems: "center", marginBottom: 28 },
-  logoBadge: {
-    width: 72, height: 72, borderRadius: 20,
-    backgroundColor: "#ef476f",
-    alignItems: "center", justifyContent: "center",
-    shadowColor: "#ef476f", shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.4, shadowRadius: 12, elevation: 8,
+  hero: { alignItems: "center", marginBottom: 20 },
+  brandLogo: { width: 220, height: 220 },
+  subtitle: {
+    color: "#0f172a", fontSize: 15, marginTop: 2, fontWeight: "700",
+    textShadowColor: "rgba(255,255,255,0.9)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
   },
-  title: {
-    color: "#fff", fontSize: 36, fontWeight: "900",
-    letterSpacing: -0.5, marginTop: 16,
-  },
-  subtitle: { color: "#a5b4fc", fontSize: 14, marginTop: 4 },
   card: {
-    backgroundColor: "#fff", padding: 20, borderRadius: 16, gap: 14,
+    backgroundColor: "rgba(255,255,255,0.96)", padding: 20, borderRadius: 16, gap: 14,
     shadowColor: "#000", shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15, shadowRadius: 12, elevation: 6,
+    shadowOpacity: 0.18, shadowRadius: 12, elevation: 6,
   },
   field: { gap: 6 },
   label: { fontSize: 12, fontWeight: "700", color: "#475569", letterSpacing: 0.3 },
@@ -214,7 +276,10 @@ const styles = StyleSheet.create({
   switchMode: { alignItems: "center", paddingVertical: 6 },
   switchModeText: { color: "#4338ca", fontSize: 13, fontWeight: "600" },
   footerNote: {
-    color: "#94a3b8", fontSize: 11, textAlign: "center",
-    marginTop: 24, paddingHorizontal: 16, lineHeight: 16,
+    color: "#0f172a", fontSize: 11, textAlign: "center",
+    marginTop: 24, paddingHorizontal: 16, lineHeight: 16, fontWeight: "600",
+    textShadowColor: "rgba(255,255,255,0.85)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
   },
 });

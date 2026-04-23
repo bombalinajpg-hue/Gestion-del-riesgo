@@ -1,0 +1,39 @@
+<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 'SYSTEM'>
+<qgis version="3.44.0-Solothurn">
+  <identifier>PendienteGrados</identifier>
+  <parentidentifier></parentidentifier>
+  <language>SPA</language>
+  <type>dataset</type>
+  <title>Pendiente en grados</title>
+  <abstract>Capa de información "Pendiente en grados del proyecto de zonificación de amenaza, vulnerabilidad y riesgo en la cuenca del río San Eugenio, estudios de detalle en los sectores de Abedules y La Trinidad. Departamento de Risaralda, municipio de Santa Rosa de Cabal. Escala 1:1.000. Año 2025. La capa corresponde a las pendientes en grados identificadas en el área de estudio.
+
+Capa de información "Pendiente en grados". Proyecto de zonificación de amenaza, vulnerabilidad y riesgo en la cuenca del río San Eugenio, estudios de detalle en los sectores de Abedules y La Trinidad. Departamento de Risaralda, municipio de Santa Rosa de Cabal. Escala 1:1.000. Año 2025 </abstract>
+  <keywords vocabulary="Buscar claves">
+    <keyword>Estudios detallados</keyword>
+    <keyword>Santa Rosa de Cabal</keyword>
+    <keyword>Risaralda</keyword>
+    <keyword>gestion del riesgo</keyword>
+  </keywords>
+  <links/>
+  <dates/>
+  <fees></fees>
+  <rights>ALDESARROLLO Y CONSORCIO GEOGLOBAL&#xd;
+</rights>
+  <encoding></encoding>
+  <crs>
+    <spatialrefsys nativeFormat="Wkt">
+      <wkt></wkt>
+      <proj4></proj4>
+      <srsid>0</srsid>
+      <srid>0</srid>
+      <authid></authid>
+      <description></description>
+      <projectionacronym></projectionacronym>
+      <ellipsoidacronym></ellipsoidacronym>
+      <geographicflag>false</geographicflag>
+    </spatialrefsys>
+  </crs>
+  <extent>
+    <spatial miny="4.87310999999999961" minz="0" maxy="4.87976800000000033" maxz="0" maxx="-75.62539400000000001" crs="EPSG:4326" minx="-75.62939099999999826" dimensions="2"/>
+  </extent>
+</qgis>

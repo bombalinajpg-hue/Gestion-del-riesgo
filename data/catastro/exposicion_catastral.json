@@ -1,0 +1,182 @@
+{
+  "generadoEn": "2026-04-22T23:58:39.231Z",
+  "fuente": "Estudio Detallado de Amenaza, Vulnerabilidad y Riesgo del río San Eugenio - ALDESARROLLO (2025)",
+  "escala": "1:1.000",
+  "datumOriginal": "MAGNA-SIRGAS Colombia CTM12",
+  "porEmergencia": {
+    "inundacion": {
+      "matchedFeatures": 40,
+      "totalFeaturesRiesgo": 46,
+      "porNivel": {
+        "Alta": {
+          "numEdificaciones": 40,
+          "valorCatastralCOP": 807917000,
+          "valorMercadoCOP": 2926337511.94,
+          "valorPorM2PromCOP": 788450,
+          "areaConstruidaM2": 2640.4500000000003,
+          "areaTerrenoM2": 3462.829999999999,
+          "poblacionOcupacionMax": 105,
+          "niños": 31,
+          "adultosMayores": 4,
+          "personasConDiscapacidad": 1,
+          "poblacionVulnerable": 36
+        },
+        "Media": {
+          "numEdificaciones": 0,
+          "valorCatastralCOP": 0,
+          "valorMercadoCOP": 0,
+          "valorPorM2PromCOP": 0,
+          "areaConstruidaM2": 0,
+          "areaTerrenoM2": 0,
+          "poblacionOcupacionMax": 0,
+          "niños": 0,
+          "adultosMayores": 0,
+          "personasConDiscapacidad": 0,
+          "poblacionVulnerable": 0
+        },
+        "Baja": {
+          "numEdificaciones": 0,
+          "valorCatastralCOP": 0,
+          "valorMercadoCOP": 0,
+          "valorPorM2PromCOP": 0,
+          "areaConstruidaM2": 0,
+          "areaTerrenoM2": 0,
+          "poblacionOcupacionMax": 0,
+          "niños": 0,
+          "adultosMayores": 0,
+          "personasConDiscapacidad": 0,
+          "poblacionVulnerable": 0
+        }
+      },
+      "total": {
+        "numEdificaciones": 40,
+        "valorCatastralCOP": 807917000,
+        "valorMercadoCOP": 2926337511.94,
+        "valorPorM2PromCOP": 788450,
+        "areaConstruidaM2": 2640.4500000000003,
+        "areaTerrenoM2": 3462.829999999999,
+        "poblacionOcupacionMax": 105,
+        "niños": 31,
+        "adultosMayores": 4,
+        "personasConDiscapacidad": 1,
+        "poblacionVulnerable": 36
+      }
+    },
+    "avenida_torrencial": {
+      "matchedFeatures": 93,
+      "totalFeaturesRiesgo": 105,
+      "porNivel": {
+        "Alta": {
+          "numEdificaciones": 71,
+          "valorCatastralCOP": 1276250000,
+          "valorMercadoCOP": 4493702800.72,
+          "valorPorM2PromCOP": 713855,
+          "areaConstruidaM2": 4641.73,
+          "areaTerrenoM2": 5679.0599999999995,
+          "poblacionOcupacionMax": 211,
+          "niños": 60,
+          "adultosMayores": 20,
+          "personasConDiscapacidad": 2,
+          "poblacionVulnerable": 82
+        },
+        "Media": {
+          "numEdificaciones": 22,
+          "valorCatastralCOP": 512580000,
+          "valorMercadoCOP": 1377260502.47,
+          "valorPorM2PromCOP": 651159,
+          "areaConstruidaM2": 1616.5,
+          "areaTerrenoM2": 1867.9300000000003,
+          "poblacionOcupacionMax": 102,
+          "niños": 28,
+          "adultosMayores": 11,
+          "personasConDiscapacidad": 4,
+          "poblacionVulnerable": 43
+        },
+        "Baja": {
+          "numEdificaciones": 0,
+          "valorCatastralCOP": 0,
+          "valorMercadoCOP": 0,
+          "valorPorM2PromCOP": 0,
+          "areaConstruidaM2": 0,
+          "areaTerrenoM2": 0,
+          "poblacionOcupacionMax": 0,
+          "niños": 0,
+          "adultosMayores": 0,
+          "personasConDiscapacidad": 0,
+          "poblacionVulnerable": 0
+        }
+      },
+      "total": {
+        "numEdificaciones": 93,
+        "valorCatastralCOP": 1788830000,
+        "valorMercadoCOP": 5870963303.190001,
+        "valorPorM2PromCOP": 699024,
+        "areaConstruidaM2": 6258.23,
+        "areaTerrenoM2": 7546.99,
+        "poblacionOcupacionMax": 313,
+        "niños": 88,
+        "adultosMayores": 31,
+        "personasConDiscapacidad": 6,
+        "poblacionVulnerable": 125
+      }
+    },
+    "movimiento_en_masa": {
+      "matchedFeatures": 112,
+      "totalFeaturesRiesgo": 270,
+      "porNivel": {
+        "Alta": {
+          "numEdificaciones": 36,
+          "valorCatastralCOP": 4676188000,
+          "valorMercadoCOP": 6751086279,
+          "valorPorM2PromCOP": 1174072,
+          "areaConstruidaM2": 5274.999999999999,
+          "areaTerrenoM2": 4245.62,
+          "poblacionOcupacionMax": 120,
+          "niños": 50,
+          "adultosMayores": 3,
+          "personasConDiscapacidad": 0,
+          "poblacionVulnerable": 53
+        },
+        "Media": {
+          "numEdificaciones": 76,
+          "valorCatastralCOP": 11337986000,
+          "valorMercadoCOP": 16457911841.600002,
+          "valorPorM2PromCOP": 1221984,
+          "areaConstruidaM2": 13904.399999999996,
+          "areaTerrenoM2": 11442.34,
+          "poblacionOcupacionMax": 272,
+          "niños": 103,
+          "adultosMayores": 4,
+          "personasConDiscapacidad": 0,
+          "poblacionVulnerable": 107
+        },
+        "Baja": {
+          "numEdificaciones": 0,
+          "valorCatastralCOP": 0,
+          "valorMercadoCOP": 0,
+          "valorPorM2PromCOP": 0,
+          "areaConstruidaM2": 0,
+          "areaTerrenoM2": 0,
+          "poblacionOcupacionMax": 0,
+          "niños": 0,
+          "adultosMayores": 0,
+          "personasConDiscapacidad": 0,
+          "poblacionVulnerable": 0
+        }
+      },
+      "total": {
+        "numEdificaciones": 112,
+        "valorCatastralCOP": 16014174000,
+        "valorMercadoCOP": 23208998120.600002,
+        "valorPorM2PromCOP": 1206584,
+        "areaConstruidaM2": 19179.399999999994,
+        "areaTerrenoM2": 15687.96,
+        "poblacionOcupacionMax": 392,
+        "niños": 153,
+        "adultosMayores": 7,
+        "personasConDiscapacidad": 0,
+        "poblacionVulnerable": 160
+      }
+    }
+  }
+}

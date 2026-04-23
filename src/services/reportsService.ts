@@ -16,6 +16,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import type {
   CitizenReport,
+  EmergencyType,
   Graph,
   PublicAlert,
   ReportSeverity,
@@ -444,6 +445,45 @@ const BLOCKING_TYPES = new Set<ReportType>([
   "riesgo_electrico",
 ]);
 
+/**
+ * Decide si una alerta ciudadana es relevante dado el tipo de emergencia
+ * activa en la app. Sirve para filtrar en dos lugares:
+ *   1) Render visual (MapViewContainer): solo dibujar alertas pertinentes.
+ *   2) Motor de ruteo (localRouter → getAllBlockedEdgeIds): solo penalizar
+ *      aristas cercanas a alertas pertinentes al fenómeno activo.
+ *
+ * Reglas:
+ *   - Tipos infraestructurales (bloqueo_vial, sendero_obstruido, riesgo_electrico,
+ *     refugio_saturado, refugio_cerrado, otro) son SIEMPRE relevantes — no importa
+ *     si el ciudadano reportó por cuál emergencia, el obstáculo existe.
+ *   - inundacion_local → relevante solo en `inundacion` y `avenida_torrencial`.
+ *   - deslizamiento_local → relevante solo en `movimiento_en_masa` y
+ *     `avenida_torrencial`.
+ *   - Si `emergencyType === "ninguna"` (sin emergencia activa), TODAS se muestran
+ *     porque el usuario puede querer ver el panorama general del municipio.
+ */
+export function isAlertRelevantFor(
+  alertType: ReportType,
+  emergencyType: EmergencyType,
+): boolean {
+  if (emergencyType === "ninguna") return true;
+  switch (alertType) {
+    case "bloqueo_vial":
+    case "sendero_obstruido":
+    case "riesgo_electrico":
+    case "refugio_saturado":
+    case "refugio_cerrado":
+    case "otro":
+      return true;
+    case "inundacion_local":
+      return emergencyType === "inundacion" || emergencyType === "avenida_torrencial";
+    case "deslizamiento_local":
+      return emergencyType === "movimiento_en_masa" || emergencyType === "avenida_torrencial";
+    default:
+      return true;
+  }
+}
+
 // Grid espacial: indexa alertas por celdas cuadradas ≥ radio, para que
 // cada arista consulte solo las 9 celdas vecinas (3×3) en vez de barrer
 // toda la lista de alertas. Complejidad pasa de O(E·A) a O(E + A).
@@ -471,9 +511,19 @@ function buildAlertGrid(
   return grid;
 }
 
-export async function getAllBlockedEdgeIds(graph: Graph): Promise<Set<number>> {
+export async function getAllBlockedEdgeIds(
+  graph: Graph,
+  emergencyType?: EmergencyType,
+): Promise<Set<number>> {
   const alerts = await getAllPublicAlerts();
-  const blocking = alerts.filter((a) => BLOCKING_TYPES.has(a.type));
+  let blocking = alerts.filter((a) => BLOCKING_TYPES.has(a.type));
+  // Filtro por pertinencia al fenómeno activo (objetivo 4 del anteproyecto:
+  // personalización por tipo de emergencia). Sin esto, una alerta de
+  // "inundación local" penalizaría aristas también en emergencia de
+  // movimiento en masa, lo cual no corresponde al escenario.
+  if (emergencyType) {
+    blocking = blocking.filter((a) => isAlertRelevantFor(a.type, emergencyType));
+  }
   if (blocking.length === 0) return new Set();
 
   const radius = CLUSTER_PARAMS.radiusMeters;

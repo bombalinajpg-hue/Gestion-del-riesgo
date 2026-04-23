@@ -52,6 +52,7 @@ import type {
   RouteProfile,
 } from '../types/graph';
 import { MinHeap } from './MinHeap';
+import { catastroEdgeMultiplier, type CatastroPenaltyOpts } from './catastroCostFactors';
 
 /**
  * Función que dado una arista del grafo y un instante de entrada (en segundos
@@ -78,6 +79,11 @@ export interface TimeDependentOptions {
   edgeCostAt: EdgeCostAtTime;
   /** Bloqueos permanentes (por reportes ciudadanos, zonas cerradas, etc.) */
   blockedEdgeIds?: Set<number>;
+  /**
+   * Factores catastrales (4A + 4B). Multiplicador adicional aplicado al
+   * costo de cada arista, derivado de vulnerabilidad vial y riesgo predial.
+   */
+  catastroPenalty?: CatastroPenaltyOpts;
 }
 
 export function timeDependentDijkstra(
@@ -114,8 +120,19 @@ export function timeDependentDijkstra(
       if (opts.blockedEdgeIds?.has(edgeIdx)) continue;
 
       const entryTime = time[u];
-      const traversalCost = opts.edgeCostAt(edgeIdx, entryTime);
+      let traversalCost = opts.edgeCostAt(edgeIdx, entryTime);
       if (!isFinite(traversalCost)) continue;
+
+      // Factores catastrales — multiplicador adicional sobre el costo
+      // evaluado en tiempo. Se aplica después del edgeCostAt para no
+      // interferir con la lógica de "¿la arista está abierta en t?".
+      if (opts.catastroPenalty) {
+        traversalCost *= catastroEdgeMultiplier(
+          graph.edges[edgeIdx],
+          opts.profile,
+          opts.catastroPenalty,
+        );
+      }
 
       const v = graph.idToIndex[graph.edges[edgeIdx].to];
       if (v === undefined) continue;

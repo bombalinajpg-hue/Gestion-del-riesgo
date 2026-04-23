@@ -42,3 +42,10 @@ app-example
 # generated native folders
 /ios
 /android
+
+# Backups locales del grafo — no se versionan
+data/*.backup.json
+
+# Firebase Admin credentials — ROTAR inmediatamente si se commitean por error
+firebase-credentials.json
+backend/firebase-credentials.json

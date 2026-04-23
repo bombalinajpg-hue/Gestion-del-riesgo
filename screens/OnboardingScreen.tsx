@@ -82,7 +82,7 @@ const SLIDES: Slide[] = [
     iconColor: "#dc2626",
     title: "Tu app de evacuación",
     body:
-      "EvacuApp te guía al refugio más seguro y cercano cuando pasa una emergencia en Santa Rosa de Cabal: inundación, deslizamiento, avenida torrencial.",
+      "EvacuApp te guía al punto de encuentro más seguro y cercano cuando pasa una emergencia en Santa Rosa de Cabal: inundación, deslizamiento, avenida torrencial.",
   },
   {
     icon: "directions-run",

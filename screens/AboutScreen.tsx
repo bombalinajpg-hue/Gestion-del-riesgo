@@ -48,7 +48,7 @@ const UTILIDAD: Section[] = [
     icon: "groups",
     title: "Basado en la comunidad",
     body:
-      "Los reportes ciudadanos de bloqueos o refugios saturados se suman al ruteo: si tres o más vecinos reportan un problema cerca, el algoritmo ajusta la ruta para evitarlo.",
+      "Los reportes ciudadanos de bloqueos o puntos de encuentro saturados se suman al ruteo: si tres o más vecinos reportan un problema cerca, el algoritmo ajusta la ruta para evitarlo.",
   },
 ];
 
@@ -87,30 +87,34 @@ const MODULOS: Section[] = [
     icon: "map",
     title: "Datos y Visor",
     body:
-      "Mapa vivo del municipio: mapa de calor de tiempos a refugio, instituciones, reportes ciudadanos activos y estadísticas agregadas.",
+      "Mapa vivo del municipio: mapa de calor de tiempos al punto de encuentro, instituciones, reportes ciudadanos activos y estadísticas agregadas.",
   },
 ];
 
 const MANUAL: { step: string; text: string }[] = [
   {
     step: "1",
-    text: "Desde el Home, toca 'Calcular ruta de evacuación' o un módulo específico.",
+    text: "Desde Inicio, toca el botón rojo 'Evacua'. Se abre un cuestionario con 3 preguntas.",
   },
   {
     step: "2",
-    text: "Abre el menú lateral del mapa (botón ☰ o el botón verde 'Elegir parámetros') para elegir emergencia, modo de desplazamiento y punto de partida.",
+    text: "Elige el tipo de emergencia (inundación, movimiento en masa o avenida torrencial). Las preguntas 2 y 3 se activan automáticamente con valores por defecto: 'Mi ubicación' como origen y 'Punto de encuentro más cercano' como destino.",
   },
   {
     step: "3",
-    text: "Elige el destino: punto más cercano (automático), elegirlo en el mapa de calor o pedir una institución específica (hospital, CAI, parroquia).",
+    text: "Toca 'Empezar'. La app calcula la ruta segura al punto de encuentro. Verás la distancia, el tiempo estimado y si algún tramo cruza zona de riesgo alto.",
   },
   {
     step: "4",
-    text: "Toca 'Iniciar ruta de evacuación'. La app dibuja el camino seguro y te avisa si hay zonas con riesgo alto.",
+    text: "Si prefieres otro destino, abre el visor geográfico (segunda pestaña del menú inferior), activa los puntos de encuentro o instituciones y toca uno en el mapa para iniciar ruta directa.",
   },
   {
     step: "5",
-    text: "Durante la evacuación puedes ver Street View del destino, abrir Google Maps externo o cancelar para elegir otra ruta.",
+    text: "Durante la ruta puedes ver Street View del destino, abrir Google Maps con la misma traza, o cancelar para elegir otra opción.",
+  },
+  {
+    step: "6",
+    text: "En emergencia real, usa el bloque 'Líneas de emergencia' al final del Home para marcar el 123, Bomberos (119), Defensa Civil (144) o Cruz Roja (132).",
   },
 ];
 
@@ -201,8 +205,14 @@ export default function AboutScreen() {
             José de Caldas.
           </Text>
           <Text style={styles.creditsBody}>
-            Datos de amenaza basados en cartografía municipal y, cuando están
-            disponibles, simulaciones hidráulicas con iRIC-Nays2DH.
+            Desarrollado en alianza con CTGlobal, integrando el Estudio
+            Detallado de Amenaza, Vulnerabilidad y Riesgo del río San
+            Eugenio (ALDESARROLLO, 2025).
+          </Text>
+          <Text style={styles.creditsBody}>
+            Datos de amenaza basados en cartografía municipal y simulaciones
+            hidráulicas; capas catastrales derivadas del avalúo predial
+            oficial.
           </Text>
           <Text style={styles.creditsBody}>
             Recomendaciones de preparación basadas en UNGRD y Defensa Civil

@@ -17,6 +17,13 @@ pydantic-settings==2.5.2
 # ─── Auth (Firebase) ──────────────────────────────────────────────
 firebase-admin==6.5.0           # verificación de ID tokens
 
+# ─── Rate limiting ─────────────────────────────────────────────────
+# slowapi protege endpoints spam-eables (signup de grupos, reportes).
+# Usamos storage en memoria — suficiente para una sola instancia y
+# evita introducir Redis. Si en el futuro se escala horizontalmente
+# hay que migrar a storage="redis://…".
+slowapi==0.1.9
+
 # ─── Geo (scripts de ingesta) ─────────────────────────────────────
 # GeoPandas carga shapefile/geojson/gpkg; Shapely hace ops geométricas.
 # Fiona es el backend de I/O de GeoPandas. pyproj para reproyecciones.

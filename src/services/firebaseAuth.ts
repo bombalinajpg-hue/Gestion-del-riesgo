@@ -29,6 +29,7 @@ import {
   getReactNativePersistence,
   initializeAuth,
   onAuthStateChanged as firebaseOnAuthStateChanged,
+  sendEmailVerification as firebaseSendEmailVerification,
   signInWithEmailAndPassword,
   signOut as firebaseSignOut,
   updateProfile,
@@ -72,6 +73,13 @@ export interface AuthUser {
   email: string | null;
   displayName: string | null;
   photoURL: string | null;
+  /** Refleja `FirebaseUser.emailVerified`. Después de que el usuario
+   *  clica el link de verificación desde su correo, Firebase actualiza
+   *  el valor en el backend pero NO en el cliente hasta llamar a
+   *  `reloadCurrentUser()`. Por eso exponemos `refreshUser()` en
+   *  AuthContext para forzar el refresh desde la UI (ej. pantalla de
+   *  Cuenta y el gate de ReportModal). */
+  emailVerified: boolean;
 }
 
 function toAuthUser(u: FirebaseUser): AuthUser {
@@ -80,6 +88,7 @@ function toAuthUser(u: FirebaseUser): AuthUser {
     email: u.email,
     displayName: u.displayName,
     photoURL: u.photoURL,
+    emailVerified: u.emailVerified,
   };
 }
 
@@ -102,7 +111,40 @@ export async function signUpWithEmail(
   if (displayName) {
     await updateProfile(cred.user, { displayName });
   }
+  // Enviamos verificación por correo — el link caduca en ~1 hora.
+  // Si el envío falla (p.ej. cuota), no hacemos fail del signup: el
+  // usuario siempre puede reintentar desde el overlay "verifica tu
+  // correo" con `resendEmailVerification`.
+  try {
+    await firebaseSendEmailVerification(cred.user);
+  } catch {}
   return toAuthUser(cred.user);
+}
+
+export async function resendEmailVerification(): Promise<void> {
+  const a = ensureInit();
+  if (!a.currentUser) throw new Error("No hay sesión activa.");
+  await firebaseSendEmailVerification(a.currentUser);
+}
+
+export function isEmailVerified(): boolean {
+  const a = ensureInit();
+  return a.currentUser?.emailVerified ?? false;
+}
+
+export async function reloadCurrentUser(): Promise<void> {
+  const a = ensureInit();
+  if (a.currentUser) await a.currentUser.reload();
+}
+
+/** Hace reload del currentUser y devuelve el AuthUser ya actualizado,
+ *  o `null` si no hay sesión. Pensado para que AuthContext pueda
+ *  refrescar su state tras una verificación de correo. */
+export async function reloadAndGetCurrentUser(): Promise<AuthUser | null> {
+  const a = ensureInit();
+  if (!a.currentUser) return null;
+  await a.currentUser.reload();
+  return a.currentUser ? toAuthUser(a.currentUser) : null;
 }
 
 export async function signOut(): Promise<void> {

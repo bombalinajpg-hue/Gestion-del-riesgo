@@ -95,7 +95,7 @@ const LESSONS: Lesson[] = [
         {
           emoji: "🏷️",
           title: "Tipo correcto",
-          text: "Elige el tipo que más se ajuste: bloqueo vial, sendero obstruido, inundación puntual, deslizamiento local, riesgo eléctrico, refugio saturado o cerrado.",
+          text: "Elige el tipo que más se ajuste: bloqueo vial, sendero obstruido, inundación puntual, deslizamiento local, riesgo eléctrico, punto de encuentro saturado o cerrado.",
         },
         {
           emoji: "⚖️",
@@ -160,7 +160,7 @@ const LESSONS: Lesson[] = [
         {
           emoji: "✅",
           title: "Después",
-          text: "Sigue en el refugio hasta recibir indicación de regreso. Reporta desaparecidos. Ayuda a vecinos si es seguro hacerlo. No consumas agua sin verificar que sea potable. Tomá fotos para reclamaciones.",
+          text: "Sigue en el punto de encuentro hasta recibir indicación de regreso. Reporta desaparecidos. Ayuda a vecinos si es seguro hacerlo. No consumas agua sin verificar que sea potable. Tomá fotos para reclamaciones.",
         },
       ],
       tip: "La UNGRD recomienda mantener el kit de 72h revisado cada 6 meses (vencimientos de agua, medicamentos, baterías).",

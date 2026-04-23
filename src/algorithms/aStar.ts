@@ -23,6 +23,7 @@ import type { Graph, LocalRouteResult, RouteProfile } from '../types/graph';
 import { fastHaversineMeters } from '../utils/haversine';
 import { buildRouteResult, type DijkstraOptions } from './dijkstra';
 import { MinHeap } from './MinHeap';
+import { catastroEdgeMultiplier } from './catastroCostFactors';
 
 /**
  * Velocidad MÁXIMA posible por perfil, en m/s. Usada SOLO para la
@@ -97,6 +98,11 @@ export function aStar(
             weight *= mult;
           }
         }
+      }
+
+      // Factores catastrales — vulnerabilidad vial + riesgo predial cercano.
+      if (opts.catastroPenalty) {
+        weight *= catastroEdgeMultiplier(edge, opts.profile, opts.catastroPenalty);
       }
 
       const v = graph.idToIndex[edge.to];

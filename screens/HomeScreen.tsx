@@ -15,7 +15,7 @@
 
 import { MaterialIcons } from "@expo/vector-icons";
 import { type Href, useFocusEffect, useRouter } from "expo-router";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Alert,
   Linking,
@@ -25,12 +25,15 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { SafeAreaView } from "react-native-safe-area-context";
 import FamilyGroupModal from "../components/FamilyGroupModal";
+import FirstRunGuide, { hasSeenFirstRunGuide } from "../components/FirstRunGuide";
 import MissingPersonsModal from "../components/MissingPersonsModal";
+import BottomNavBar from "../components/BottomNavBar";
 import QuickEvacuateSheet, { type ConfirmPayload } from "../components/QuickEvacuateSheet";
 import ReportModal from "../components/ReportModal";
 import SafetyStatusModal from "../components/SafetyStatusModal";
+import { useAuth } from "../context/AuthContext";
 import { useRouteContext } from "../context/RouteContext";
 import { useCommunityStatus } from "../src/hooks/useCommunityStatus";
 import destinosRaw from "../data/destinos.json";
@@ -50,6 +53,22 @@ function pluralizeAlerts(count: number): string {
 }
 
 type MaterialIconName = React.ComponentProps<typeof MaterialIcons>["name"];
+
+// Bloque inferior de líneas de emergencia. Reemplaza al antiguo FAB 123
+// flotante con un listado estético, para que el usuario tenga a mano
+// todos los números clave (no solo 123).
+const EMERGENCY_NUMBERS: {
+  label: string;
+  number: string;
+  icon: MaterialIconName;
+  color: string;
+  bg: string;
+}[] = [
+  { label: "Línea 123",       number: "123", icon: "phone",             color: "#dc2626", bg: "#fee2e2" },
+  { label: "Bomberos",        number: "119", icon: "local-fire-department", color: "#ea580c", bg: "#ffedd5" },
+  { label: "Defensa Civil",   number: "144", icon: "shield",            color: "#0f766e", bg: "#ccfbf1" },
+  { label: "Cruz Roja",       number: "132", icon: "medical-services",  color: "#b91c1c", bg: "#fee2e2" },
+];
 
 interface ModuleDef {
   id: string;
@@ -139,20 +158,26 @@ export default function HomeScreen() {
   const [familyOpen, setFamilyOpen] = useState(false);
   const [missingOpen, setMissingOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
-  const insets = useSafeAreaInsets();
+  const { user } = useAuth();
+  const [guideOpen, setGuideOpen] = useState(false);
+
+  // Tour de primera ejecución: se muestra una vez por cuenta. El flag
+  // vive en AsyncStorage con la key `firstRunGuideSeen:<uid>` (por eso
+  // un nuevo usuario en el mismo teléfono sí lo ve de nuevo).
+  useEffect(() => {
+    if (!user?.uid) return;
+    let cancelled = false;
+    hasSeenFirstRunGuide(user.uid).then((seen) => {
+      if (!cancelled && !seen) setGuideOpen(true);
+    });
+    return () => { cancelled = true; };
+  }, [user?.uid]);
 
   useFocusEffect(
     useCallback(() => {
       refresh({ maxAgeMs: 15_000 });
     }, [refresh]),
   );
-
-  const handleCall123 = () => {
-    Alert.alert("Llamar al 123", "¿Deseas llamar al número de emergencias?", [
-      { text: "Cancelar", style: "cancel" },
-      { text: "Llamar", onPress: () => Linking.openURL("tel:123") },
-    ]);
-  };
 
   // El sheet devuelve las 3 decisiones en un único payload. Según el
   // destChoice:
@@ -221,8 +246,7 @@ export default function HomeScreen() {
               <MaterialIcons name="chevron-right" size={14} color="#ffd166" />
             </View>
             <View style={styles.heroBadge}>
-              <MaterialIcons name="shield" size={14} color="#ffffff" />
-              <Text style={styles.heroBadgeText}>SANTA ROSA DE CABAL</Text>
+              <Text style={styles.heroBadgeText}>Santa Rosa de Cabal</Text>
             </View>
             <Text style={styles.heroTitle}>
               Evacu<Text style={styles.heroTitleAccent}>App</Text>
@@ -265,18 +289,17 @@ export default function HomeScreen() {
           )}
 
           {/* ── CTA PRINCIPAL — Panic button ───────────────────────────
-              Un solo tap lanza el flujo de emergencia (Alert de tipo,
-              Alert de inicio) y auto-calcula la ruta al refugio más
-              cercano con pesos de amenaza. Rojo saturado + sombra
-              encendida para que sea identificable como "acción crítica"
-              sin aprendizaje previo — mismo lenguaje visual que el 123. */}
+              Un solo tap lanza el flujo de emergencia y auto-calcula la
+              ruta al punto de encuentro más cercano con pesos de amenaza.
+              Rojo saturado + sombra encendida para que sea identificable
+              como "acción crítica" sin aprendizaje previo. */}
           <TouchableOpacity
             style={styles.ctaButton}
             onPress={() => setSheetVisible(true)}
             activeOpacity={0.85}
             accessibilityLabel="Evacúa ahora"
             accessibilityRole="button"
-            accessibilityHint="Pregunta el tipo de emergencia y el punto de inicio; calcula automáticamente la ruta al refugio más seguro y cercano"
+            accessibilityHint="Pregunta el tipo de emergencia y el punto de inicio; calcula automáticamente la ruta al punto de encuentro más seguro y cercano"
           >
             <View style={styles.ctaIconWrap}>
               <MaterialIcons name="directions-run" size={28} color="#fff" />
@@ -284,7 +307,7 @@ export default function HomeScreen() {
             <View style={{ flex: 1 }}>
               <Text style={styles.ctaTitle}>Evacua</Text>
               <Text style={styles.ctaSubtitle}>
-                Ruta al refugio más seguro y cercano
+                Ruta al punto de encuentro más seguro y cercano
               </Text>
             </View>
             <MaterialIcons name="arrow-forward" size={22} color="#fff" />
@@ -306,7 +329,12 @@ export default function HomeScreen() {
               <View style={[styles.emergencyToolIcon, { backgroundColor: "#d1fae5" }]}>
                 <MaterialIcons name="shield" size={22} color="#10b981" />
               </View>
-              <Text style={styles.emergencyToolLabel}>Mi estado</Text>
+              <Text
+                style={styles.emergencyToolLabel}
+                numberOfLines={2}
+                adjustsFontSizeToFit
+                minimumFontScale={0.85}
+              >Mi estado</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -319,7 +347,12 @@ export default function HomeScreen() {
               <View style={[styles.emergencyToolIcon, { backgroundColor: "#ede9fe" }]}>
                 <MaterialIcons name="group" size={22} color="#7c3aed" />
               </View>
-              <Text style={styles.emergencyToolLabel}>Familia</Text>
+              <Text
+                style={styles.emergencyToolLabel}
+                numberOfLines={2}
+                adjustsFontSizeToFit
+                minimumFontScale={0.85}
+              >Familia</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -332,7 +365,12 @@ export default function HomeScreen() {
               <View style={[styles.emergencyToolIcon, { backgroundColor: "#fce7f3" }]}>
                 <MaterialIcons name="person-search" size={22} color="#db2777" />
               </View>
-              <Text style={styles.emergencyToolLabel}>Desaparecido</Text>
+              <Text
+                style={styles.emergencyToolLabel}
+                numberOfLines={2}
+                adjustsFontSizeToFit
+                minimumFontScale={0.75}
+              >Desaparecido</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -345,30 +383,14 @@ export default function HomeScreen() {
               <View style={[styles.emergencyToolIcon, { backgroundColor: "#ffedd5" }]}>
                 <MaterialIcons name="report" size={22} color="#c2410c" />
               </View>
-              <Text style={styles.emergencyToolLabel}>Reportar</Text>
+              <Text
+                style={styles.emergencyToolLabel}
+                numberOfLines={2}
+                adjustsFontSizeToFit
+                minimumFontScale={0.85}
+              >Reportar</Text>
             </TouchableOpacity>
           </View>
-
-          {/* ── VISOR — promovido de grid a CTA secundario ─────────────
-              El visor es la pantalla de contexto (mapa vivo, reportes,
-              cifras) — útil antes, durante y después. Ponerlo en el
-              grid lo escondía; acá queda a 1 tap. */}
-          <TouchableOpacity
-            style={styles.visorCard}
-            onPress={() => router.push("/statistics")}
-            activeOpacity={0.85}
-            accessibilityRole="button"
-            accessibilityLabel="Abrir visor: mapa vivo con reportes y cifras"
-          >
-            <View style={styles.visorIcon}>
-              <MaterialIcons name="map" size={24} color="#4338ca" />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.visorTitle}>Visor</Text>
-              <Text style={styles.visorSubtitle}>Mapa vivo · reportes · cifras</Text>
-            </View>
-            <MaterialIcons name="chevron-right" size={22} color="#94a3b8" />
-          </TouchableOpacity>
 
           {/* ── MÓDULOS SECUNDARIOS (grid 2×n) ──────────────────────────
               Se sacan del grid: `routes` (vive en CTA "Evacua"),
@@ -405,6 +427,41 @@ export default function HomeScreen() {
             ))}
           </View>
 
+          {/* ── BLOQUE NÚMEROS DE EMERGENCIA ─────────────────────────── */}
+          <Text style={styles.sectionTitle}>Líneas de emergencia</Text>
+          <View style={styles.emergencyRow}>
+            {EMERGENCY_NUMBERS.map((num) => (
+              <TouchableOpacity
+                key={num.label}
+                style={styles.emergencyTool}
+                onPress={() => {
+                  Alert.alert(
+                    `Llamar a ${num.label}`,
+                    `¿Deseas llamar al ${num.number}?`,
+                    [
+                      { text: "Cancelar", style: "cancel" },
+                      { text: "Llamar", onPress: () => Linking.openURL(`tel:${num.number}`) },
+                    ],
+                  );
+                }}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel={`Llamar a ${num.label} ${num.number}`}
+              >
+                <View style={[styles.emergencyToolIcon, { backgroundColor: num.bg }]}>
+                  <MaterialIcons name={num.icon} size={22} color={num.color} />
+                </View>
+                <Text
+                  style={styles.emergencyToolLabel}
+                  numberOfLines={2}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.75}
+                >{num.label}</Text>
+                <Text style={styles.emergencyNumber}>{num.number}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
           {/* ── FOOTER ────────────────────────────────────────────────── */}
           <View style={styles.footer}>
             <Text style={styles.footerText}>
@@ -413,22 +470,12 @@ export default function HomeScreen() {
             <Text style={styles.footerSub}>
               Ingeniería Catastral y Geodesia · Universidad Distrital Francisco José de Caldas
             </Text>
+            <Text style={styles.footerAlliance}>
+              En alianza con CTGlobal
+            </Text>
           </View>
         </ScrollView>
       </SafeAreaView>
-
-      {/* ── BOTÓN 123 FLOTANTE ───────────────────────────────────────── */}
-      <TouchableOpacity
-        style={[styles.emergencyFab, { bottom: 24 + insets.bottom }]}
-        onPress={handleCall123}
-        activeOpacity={0.85}
-        accessibilityLabel="Llamar a la línea de emergencia 123"
-        accessibilityRole="button"
-        accessibilityHint="Abre el marcador telefónico con el número 123"
-      >
-        <MaterialIcons name="phone" size={22} color="#fff" />
-        <Text style={styles.emergencyFabText}>123</Text>
-      </TouchableOpacity>
 
       <QuickEvacuateSheet
         visible={sheetVisible}
@@ -458,16 +505,24 @@ export default function HomeScreen() {
           refresh({ recompute: true });
         }}
       />
+
+      <FirstRunGuide
+        userUid={user?.uid ?? null}
+        visible={guideOpen}
+        onClose={() => setGuideOpen(false)}
+      />
+
+      <BottomNavBar active="inicio" />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#f8fafc" },
-  // paddingBottom reserva espacio para el 123 FAB (bottom: 24, alto ~50)
-  // + margen holgado para que la última fila del grid nunca quede tapada,
-  // ni siquiera en dispositivos con home-indicator grande.
-  scrollContent: { paddingBottom: 140 },
+  // Reserva espacio para el bottom nav (alto ~64) + safe-area inferior
+  // + bloque "Líneas de emergencia" (~140) + footer (~90). El valor
+  // previo de 110 cortaba la última fila cuando se agregó el bloque.
+  scrollContent: { paddingBottom: 170 },
 
   // ─── Hero ───
   hero: {
@@ -623,41 +678,28 @@ const styles = StyleSheet.create({
     color: "#0f172a",
     textAlign: "center",
   },
-
-  // ─── Card del Visor (CTA secundario) ───
-  visorCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    marginHorizontal: 16,
-    marginTop: 14,
-    backgroundColor: "#fff",
-    borderRadius: 14,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: "#e0e7ff",
+  emergencyNumber: {
+    fontSize: 11,
+    color: "#dc2626",
+    fontWeight: "800",
+    letterSpacing: 0.5,
+    marginTop: 2,
   },
-  visorIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
-    backgroundColor: "#e0e7ff",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  visorTitle: { fontSize: 15, fontWeight: "700", color: "#0f172a" },
-  visorSubtitle: { fontSize: 12, color: "#64748b", marginTop: 2 },
 
-  // ─── Grid ───
+  // ─── Título de sección ───
+  // Sentence-case + bold + color acento + línea separadora arriba.
+  // Reemplaza el antiguo estilo all-caps que el usuario consideró feo.
   sectionTitle: {
-    fontSize: 14,
-    fontWeight: "700",
-    color: "#475569",
-    marginHorizontal: 20,
+    fontSize: 16,
+    fontWeight: "800",
+    color: "#0f766e",
+    marginHorizontal: 16,
     marginTop: 24,
-    marginBottom: 12,
-    textTransform: "uppercase",
-    letterSpacing: 0.8,
+    marginBottom: 10,
+    paddingTop: 12,
+    borderTopWidth: 2,
+    borderTopColor: "#e0f2f1",
+    letterSpacing: -0.2,
   },
   grid: {
     flexDirection: "row",
@@ -717,26 +759,16 @@ const styles = StyleSheet.create({
 
   // ─── Footer ───
   footer: { marginTop: 24, alignItems: "center", paddingHorizontal: 16 },
-  footerText: { fontSize: 11, color: "#94a3b8", fontStyle: "italic" },
-  footerSub: { fontSize: 10, color: "#cbd5e1", marginTop: 2 },
-
-  // ─── FAB 123 ───
-  emergencyFab: {
-    position: "absolute",
-    bottom: 24,
-    right: 24,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    backgroundColor: "#dc2626",
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    borderRadius: 30,
-    shadowColor: "#dc2626",
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.5,
-    shadowRadius: 12,
-    elevation: 10,
+  footerText: {
+    fontSize: 11, color: "#94a3b8", fontStyle: "italic",
+    textAlign: "center",
   },
-  emergencyFabText: { color: "#fff", fontWeight: "800", fontSize: 16 },
+  footerSub: {
+    fontSize: 10, color: "#64748b", marginTop: 2,
+    textAlign: "center",
+  },
+  footerAlliance: {
+    fontSize: 10, color: "#0f766e", marginTop: 4,
+    textAlign: "center", fontWeight: "700",
+  },
 });

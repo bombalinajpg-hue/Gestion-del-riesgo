@@ -34,7 +34,7 @@ import {
   TouchableWithoutFeedback,
   View,
 } from "react-native";
-import MapView, { MapType, Marker, Polyline } from "react-native-maps";
+import MapView, { Circle, MapType, Marker, Polyline } from "react-native-maps";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouteContext } from "../context/RouteContext";
 import avenidaTorrencialData from "../data/amenaza_avenida_torrencial.json";
@@ -46,6 +46,7 @@ import { getGraph } from "../src/services/graphService";
 import { queryFromLocation } from "../src/services/isochroneService";
 import { getRefugeByName } from "../src/services/refugesService";
 import { useCommunityStatus } from "../src/hooks/useCommunityStatus";
+import { isAlertRelevantFor } from "../src/services/reportsService";
 import { useGraphBootstrap } from "../src/hooks/useGraphBootstrap";
 import { useIsochrones } from "../src/hooks/useIsochrones";
 import { useLocationTracking } from "../src/hooks/useLocationTracking";
@@ -152,10 +153,41 @@ function findClosestViaGraph(
   return closestByHaversine({ latitude: userLat, longitude: userLng }, destinations);
 }
 
-function openInGoogleMaps(sLat: number, sLng: number, eLat: number, eLng: number, profile: string) {
+// Samplea hasta 8 waypoints intermedios (Google Maps acepta hasta 9)
+// equidistantes en la polilínea para que la ruta que calcule Google
+// respete aproximadamente la misma forma que calculamos internamente.
+// No es idéntica — Google siempre re-rutea — pero los waypoints fuerzan
+// que pase por puntos clave (bifurcaciones, desvíos que evitan riesgo).
+function sampleWaypoints(
+  coords: { latitude: number; longitude: number }[],
+  maxCount = 8,
+): { latitude: number; longitude: number }[] {
+  if (coords.length <= 2) return [];
+  const intermediate = coords.slice(1, -1);
+  if (intermediate.length <= maxCount) return intermediate;
+  const step = intermediate.length / (maxCount + 1);
+  const out: { latitude: number; longitude: number }[] = [];
+  for (let i = 1; i <= maxCount; i++) {
+    const idx = Math.floor(i * step);
+    if (intermediate[idx]) out.push(intermediate[idx]);
+  }
+  return out;
+}
+
+function openInGoogleMaps(
+  sLat: number, sLng: number, eLat: number, eLng: number, profile: string,
+  routeCoords?: { latitude: number; longitude: number }[],
+) {
   const travelmode = profile === "driving-car" ? "driving"
     : profile === "cycling-regular" ? "bicycling" : "walking";
-  const url = `https://www.google.com/maps/dir/?api=1&origin=${sLat},${sLng}&destination=${eLat},${eLng}&travelmode=${travelmode}`;
+  let url = `https://www.google.com/maps/dir/?api=1&origin=${sLat},${sLng}&destination=${eLat},${eLng}&travelmode=${travelmode}`;
+  if (routeCoords && routeCoords.length > 2) {
+    const wp = sampleWaypoints(routeCoords, 8);
+    if (wp.length > 0) {
+      const waypointsStr = wp.map((c) => `${c.latitude},${c.longitude}`).join("|");
+      url += `&waypoints=${encodeURIComponent(waypointsStr)}`;
+    }
+  }
   Linking.openURL(url).catch(() => Alert.alert("No se pudo abrir Google Maps"));
 }
 
@@ -187,7 +219,7 @@ export default function MapViewContainer() {
   // Alertas ciudadanas vienen de la cache compartida. El poll de 60 s
   // abajo dispara recompute para mantener el clustering fresco; el resto
   // de pantallas ve los mismos datos sin duplicar queries.
-  const { alerts: blockingAlerts, refresh: refreshCommunity } = useCommunityStatus();
+  const { alerts: rawBlockingAlerts, refresh: refreshCommunity } = useCommunityStatus();
   // isoTable + computeIso encapsulados (ver useIsochrones). Se configura
   // tras `routeProfile` y `emergencyType` más abajo vía useRouteContext.
   const [showIsochroneOverlay, setShowIsochroneOverlay] = useState(false);
@@ -237,6 +269,17 @@ export default function MapViewContainer() {
   const puntosEncuentro = useMemo(
     () => destinos.filter((d) => d.tipo === "punto_encuentro"),
     [],
+  );
+
+  // Alertas filtradas por pertinencia al tipo de emergencia activa.
+  // Una alerta de `inundacion_local` no es relevante cuando la emergencia
+  // activa es `movimiento_en_masa` — el ciudadano la reportó por otro
+  // escenario. Este filtro implementa el objetivo 4 del anteproyecto:
+  // personalización por tipo de emergencia. También se aplica en el motor
+  // de ruteo (getAllBlockedEdgeIds recibe emergencyType) para coherencia.
+  const blockingAlerts = useMemo(
+    () => rawBlockingAlerts.filter((a) => isAlertRelevantFor(a.type, emergencyType)),
+    [rawBlockingAlerts, emergencyType],
   );
 
   // Grafo + snap encapsulados en hook. Devuelve cuando todo está listo
@@ -330,6 +373,71 @@ export default function MapViewContainer() {
 
   // calcularRuta vive ahora en useRoutePlanning (arriba).
 
+  // ─── Recálculo automático ante alertas ciudadanas nuevas ───────────────
+  // Objetivo: si el usuario ya está evacuando y aparece un reporte
+  // ciudadano (cluster con ≥3 dispositivos) que cruza la ruta vigente,
+  // la app recalcula la ruta sola y avisa con un banner. Sin esto, el
+  // usuario seguiría por una ruta que ya no es segura.
+  //
+  // La lógica compara las alertas actuales contra las "conocidas" en el
+  // último cálculo (ref). Si hay nuevas y al menos una cae a ≤30 m de
+  // algún punto de `routeCoords`, disparamos `calcularRuta(true)`. El
+  // ruteador leerá las alertas via `getAllBlockedEdgeIds` y evitará las
+  // aristas nuevas automáticamente.
+  const [rerouteBanner, setRerouteBanner] = useState<string | null>(null);
+  const rerouteBannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const knownAlertIdsRef = useRef<Set<string>>(new Set());
+  // calcularRuta se recrea en cada render del hook padre. Si la
+  // incluyéramos en deps, el useEffect correría cada render. Ref = fix.
+  const calcularRutaRef = useRef(calcularRuta);
+  useEffect(() => { calcularRutaRef.current = calcularRuta; }, [calcularRuta]);
+
+  // Snapshot de alertas conocidas al calcular una ruta exitosa. Esto
+  // sirve de baseline para detectar "alertas nuevas" más adelante.
+  useEffect(() => {
+    if (!rutaSugerida || routeCoords.length === 0) return;
+    knownAlertIdsRef.current = new Set(blockingAlerts.map((a) => a.id));
+    // Nota: depender de blockingAlerts acá crearía un bucle. Capturamos
+    // solo cuando la ruta se recalcula (routeCoords cambia).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rutaSugerida, routeCoords]);
+
+  useEffect(() => {
+    if (!evacuando || !rutaSugerida || routeCoords.length === 0) return;
+    const newAlerts = blockingAlerts.filter(
+      (a) => !knownAlertIdsRef.current.has(a.id),
+    );
+    if (newAlerts.length === 0) return;
+
+    // ¿Alguna alerta nueva cae dentro del radio del cluster respecto a
+    // la polilínea vigente? Iteramos hasta la primera coincidencia para
+    // no barrer todos los puntos si ya se decidió recalcular.
+    const affects = newAlerts.some((alert) =>
+      routeCoords.some(
+        (c) =>
+          haversineM(alert.lat, alert.lng, c.latitude, c.longitude) <=
+          CLUSTER_RADIUS_METERS,
+      ),
+    );
+
+    // Actualiza siempre la baseline (también en el caso "no afecta") para
+    // no volver a evaluar estas alertas en el próximo tick del poller.
+    knownAlertIdsRef.current = new Set(blockingAlerts.map((a) => a.id));
+    if (!affects) return;
+
+    // Hay alerta nueva cruzando la ruta: banner + recálculo. El banner
+    // desaparece solo tras 5 s; si entra otra alerta antes, reseteamos
+    // el timer para que el mensaje quede visible el ciclo completo.
+    setRerouteBanner("🛣️ Ruta recalculada por un bloqueo reportado");
+    if (rerouteBannerTimerRef.current) clearTimeout(rerouteBannerTimerRef.current);
+    rerouteBannerTimerRef.current = setTimeout(() => setRerouteBanner(null), 5000);
+    void calcularRutaRef.current(true);
+  }, [blockingAlerts, evacuando, rutaSugerida, routeCoords]);
+
+  useEffect(() => () => {
+    if (rerouteBannerTimerRef.current) clearTimeout(rerouteBannerTimerRef.current);
+  }, []);
+
   // El cálculo solo lo dispara el botón "CALCULAR RUTA DE EVACUACIÓN"
   // explícitamente; antes había un auto-route al cambiar de emergencia
   // que resultaba confuso (veías una ruta sin haberla pedido).
@@ -372,7 +480,9 @@ export default function MapViewContainer() {
     if (!location || !destinoFinal) return;
     const sLat = startMode === "manual" && startPoint ? startPoint.lat : location.latitude;
     const sLng = startMode === "manual" && startPoint ? startPoint.lng : location.longitude;
-    openInGoogleMaps(sLat, sLng, destinoFinal.lat, destinoFinal.lng, routeProfile ?? "foot-walking");
+    // Pasamos `routeCoords` (la polilínea calculada) para que Google Maps
+    // reciba waypoints samplados y su ruta se parezca a la nuestra.
+    openInGoogleMaps(sLat, sLng, destinoFinal.lat, destinoFinal.lng, routeProfile ?? "foot-walking", routeCoords);
   };
 
   // Handler para el sheet "Evacua" local — es el mismo flujo que
@@ -565,19 +675,18 @@ export default function MapViewContainer() {
     return () => clearTimeout(t);
   }, [routeCoords]);
 
-  // initialRegion derivado del bbox del grafo — así el mapa siempre abre
-  // enmarcando exactamente la zona cubierta, sin asumir una ciudad fija.
-  const initialRegion = useMemo(() => {
-    if (!graphReady) {
-      return { latitude: 4.8727, longitude: -75.6109, latitudeDelta: 0.07, longitudeDelta: 0.07 };
-    }
-    const b = getGraph().bbox;
-    const latitude = (b.minLat + b.maxLat) / 2;
-    const longitude = (b.minLng + b.maxLng) / 2;
-    const latitudeDelta = Math.max((b.maxLat - b.minLat) * 1.1, 0.01);
-    const longitudeDelta = Math.max((b.maxLng - b.minLng) * 1.1, 0.01);
-    return { latitude, longitude, latitudeDelta, longitudeDelta };
-  }, [graphReady]);
+  // initialRegion centrado en la ZONA DE ESTUDIO DETALLADO del río San
+  // Eugenio (bbox de ElementosExpuestos, que es el ámbito del EDAVR
+  // ALDESARROLLO 2025). El grafo OSM cubre más territorio, pero el
+  // usuario espera ver directamente el área del proyecto al abrir la app.
+  // Bbox calculado offline desde elementos_expuestos.json:
+  //   min: (-75.6291, 4.8713), max: (-75.6251, 4.8789)
+  const initialRegion = useMemo(() => ({
+    latitude: 4.8751,
+    longitude: -75.6271,
+    latitudeDelta: 0.012,
+    longitudeDelta: 0.012,
+  }), []);
 
   // Memoizado para no llamar `getGraph()` en cada render dentro del JSX.
   // El grafo es singleton y no cambia tras `graphReady`, así que la
@@ -701,7 +810,7 @@ export default function MapViewContainer() {
 
   return (
     <View style={styles.container}>
-      <View style={styles.floatingTitle}>
+      <View style={[styles.floatingTitle, { top: insets.top + 10 }]}>
         <Text style={styles.floatingTitleText}>EvacuApp</Text>
       </View>
 
@@ -713,7 +822,7 @@ export default function MapViewContainer() {
 
       <TouchableOpacity
         onPress={() => router.back()}
-        style={styles.backMapButton}
+        style={[styles.backMapButton, { top: insets.top + 10 }]}
         accessibilityLabel="Volver"
       >
         <MaterialIcons name="arrow-back" size={22} color="#073b4c" />
@@ -725,7 +834,7 @@ export default function MapViewContainer() {
       {!evacuando && (
         <TouchableOpacity
           onPress={() => setEvacuaSheetOpen(true)}
-          style={styles.menuButton}
+          style={[styles.menuButton, { top: insets.top + 66 }]}
           accessibilityLabel="Abrir evacuación rápida"
           accessibilityRole="button"
         >
@@ -760,6 +869,12 @@ export default function MapViewContainer() {
         destinoFinal={destinoFinal}
         iconoModo={iconoModo}
       />
+
+      {rerouteBanner && (
+        <View style={styles.rerouteBanner} pointerEvents="none">
+          <Text style={styles.rerouteBannerText}>{rerouteBanner}</Text>
+        </View>
+      )}
 
       <MapView
         ref={mapRef}
@@ -844,17 +959,32 @@ export default function MapViewContainer() {
           />
         )}
 
-        {/* Alertas ciudadanas: solo visibles mientras se está evacuando
-            (para avisar al usuario de zonas que el router ya está evitando).
-            Antes de iniciar la ruta, el mapa queda limpio — las alertas se
-            ven en el Visor si el usuario las quiere consultar. */}
-        {evacuando && blockingAlerts.map((alert) => (
+        {/* Alertas ciudadanas: se muestran SIEMPRE (antes y durante la
+            evacuación) para que el usuario vea qué bloqueos están
+            activos en el municipio y pueda evaluar qué rutas evita el
+            router. Cada alerta dibuja un círculo semi-translúcido con
+            el radio del cluster y un pin con color según el tipo. */}
+        {blockingAlerts.map((alert) => {
+          const color = colorForAlertType(alert.type);
+          // Hex + alpha "33" = ~20% opacidad para el relleno.
+          return (
+            <Circle
+              key={`alert-circle-${alert.id}`}
+              center={{ latitude: alert.lat, longitude: alert.lng }}
+              radius={CLUSTER_RADIUS_METERS}
+              fillColor={`${color}33`}
+              strokeColor={color}
+              strokeWidth={2}
+            />
+          );
+        })}
+        {blockingAlerts.map((alert) => (
           <Marker
-            key={alert.id}
+            key={`alert-marker-${alert.id}`}
             coordinate={{ latitude: alert.lat, longitude: alert.lng }}
             title={labelForAlertType(alert.type)}
             description={`${alert.uniqueDeviceCount} ciudadano(s) · ${Math.round(alert.confidence * 100)}%`}
-            pinColor="red"
+            pinColor={pinColorForAlertType(alert.type)}
             stopPropagation
           />
         ))}
@@ -1030,7 +1160,7 @@ export default function MapViewContainer() {
           accessibilityRole="button"
         >
           <MaterialIcons name="check-circle" size={20} color="#ffffff" style={{ marginRight: 8 }} />
-          <Text style={styles.confirmarPuntoButtonText}>CONFIRMAR PUNTO DE INICIO</Text>
+          <Text style={styles.confirmarPuntoButtonText}>Confirmar punto de inicio</Text>
         </TouchableOpacity>
       )}
 
@@ -1053,7 +1183,7 @@ export default function MapViewContainer() {
           accessibilityHint="Abre el panel para elegir emergencia, origen y destino"
         >
           <MaterialIcons name="directions-run" size={22} color="#fff" />
-          <Text style={styles.evacuaFabText}>EVACUA</Text>
+          <Text style={styles.evacuaFabText}>Evacua</Text>
         </TouchableOpacity>
       )}
 
@@ -1064,7 +1194,7 @@ export default function MapViewContainer() {
       {isCalculating && !evacuando && (
         <View style={styles.calculandoPill} pointerEvents="none">
           <ActivityIndicator size="small" color="#fff" style={{ marginRight: 8 }} />
-          <Text style={styles.calculandoText}>CALCULANDO RUTA...</Text>
+          <Text style={styles.calculandoText}>Calculando ruta…</Text>
         </View>
       )}
 
@@ -1075,7 +1205,7 @@ export default function MapViewContainer() {
           accessibilityLabel="Cancelar evacuación en curso"
           accessibilityRole="button"
         >
-          <Text style={styles.cancelarButtonText}>✕ CANCELAR EVACUACIÓN</Text>
+          <Text style={styles.cancelarButtonText}>✕ Cancelar evacuación</Text>
         </TouchableOpacity>
       )}
 
@@ -1102,9 +1232,47 @@ function labelForAlertType(type: string): string {
     case "inundacion_local": return "⚠️ Inundación puntual";
     case "deslizamiento_local": return "⚠️ Deslizamiento";
     case "riesgo_electrico": return "⚠️ Riesgo eléctrico";
-    case "refugio_saturado": return "ℹ️ Refugio saturado";
-    case "refugio_cerrado": return "ℹ️ Refugio cerrado";
+    case "refugio_saturado": return "ℹ️ Punto de encuentro saturado";
+    case "refugio_cerrado": return "ℹ️ Punto de encuentro cerrado";
     default: return "⚠️ Alerta ciudadana";
+  }
+}
+
+// Radio nominal del cluster de reportes ciudadanos (debe estar sincronizado
+// con CLUSTER_PARAMS.radiusMeters en src/services/reportsService.ts). Se
+// usa tanto para dibujar el área de influencia de la alerta en el mapa
+// como para decidir si una alerta nueva cruza la ruta vigente.
+const CLUSTER_RADIUS_METERS = 30;
+
+// Paleta por tipo de reporte. Sincronizada con la leyenda de amenazas:
+// azul para agua, marrón para tierra, etc. Se usa tanto para el pin como
+// para el círculo semitransparente de radio.
+function colorForAlertType(type: string): string {
+  switch (type) {
+    case "bloqueo_vial":
+    case "sendero_obstruido": return "#ff6b35"; // naranja
+    case "inundacion_local": return "#1e90ff"; // azul
+    case "deslizamiento_local": return "#8b4513"; // marrón
+    case "riesgo_electrico": return "#fbbf24"; // amarillo
+    case "refugio_saturado":
+    case "refugio_cerrado": return "#9333ea"; // morado
+    default: return "#ef4444"; // rojo
+  }
+}
+
+// pinColor en RN Maps para Android acepta un set limitado de nombres:
+// azure, blue, cyan, green, magenta, orange, red, rose, violet, yellow.
+// Nombres fuera de esa lista (p. ej. "brown") fallan al rojo por default.
+function pinColorForAlertType(type: string): string {
+  switch (type) {
+    case "bloqueo_vial":
+    case "sendero_obstruido": return "orange";
+    case "inundacion_local": return "blue";
+    case "deslizamiento_local": return "rose";
+    case "riesgo_electrico": return "yellow";
+    case "refugio_saturado":
+    case "refugio_cerrado": return "violet";
+    default: return "red";
   }
 }
 
@@ -1112,8 +1280,11 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   map: { flex: 1 },
   loadingContainer: { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#f0f4f8" },
+  // `top` se sobreescribe en runtime con `insets.top + 10` para respetar
+  // el notch/status bar. Mantenemos un fallback razonable aquí por si el
+  // insets aún no está disponible en el primer render.
   floatingTitle: {
-    position: "absolute", top: 60, alignSelf: "center", zIndex: 10,
+    position: "absolute", top: 10, alignSelf: "center", zIndex: 10,
     backgroundColor: "#ffffffdd", paddingHorizontal: 20, paddingVertical: 10, borderRadius: 20,
     shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15, shadowRadius: 4, elevation: 5,
   },
@@ -1136,14 +1307,36 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     letterSpacing: 0.4,
   },
+  rerouteBanner: {
+    position: "absolute",
+    top: 150,
+    alignSelf: "center",
+    zIndex: 20,
+    backgroundColor: "#f59e0b",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 24,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 8,
+    maxWidth: "90%",
+  },
+  rerouteBannerText: {
+    color: "#fff",
+    fontWeight: "600",
+    fontSize: 14,
+    textAlign: "center",
+  },
   backMapButton: {
-    position: "absolute", top: 60, left: 20, zIndex: 11,
+    position: "absolute", top: 10, left: 20, zIndex: 11,
     backgroundColor: "#ffffffee", width: 40, height: 40, borderRadius: 20,
     alignItems: "center", justifyContent: "center",
     shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4, elevation: 5,
   },
   menuButton: {
-    position: "absolute", top: 120, left: 20, zIndex: 10,
+    position: "absolute", top: 66, left: 20, zIndex: 10,
     backgroundColor: "#ffffffee", padding: 10, borderRadius: 10,
     shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4, elevation: 5,
   },
@@ -1203,15 +1396,25 @@ const styles = StyleSheet.create({
   },
   evacuaFabText: { color: "#fff", fontWeight: "800", fontSize: 16, letterSpacing: 0.5 },
   legendPosition: { position: "absolute", right: 20, top: 420, zIndex: 10 },
+  // Banner flotante respeta márgenes laterales para no colisionar con
+  // la columna de botones derecha (`bottomRightGroup`, right: 20) y se
+  // alinea al centro con texto centrado — si el texto es largo, envuelve
+  // en 2 líneas en vez de desbordarse.
   floatingBanner: {
-    position: "absolute", bottom: 170, alignSelf: "center",
-    backgroundColor: "#ffffffee", paddingHorizontal: 20, paddingVertical: 12, borderRadius: 20, elevation: 5,
+    position: "absolute", bottom: 170, left: 16, right: 84,
+    backgroundColor: "#ffffffee", paddingHorizontal: 18, paddingVertical: 12, borderRadius: 20, elevation: 5,
+    shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15, shadowRadius: 4,
   },
-  floatingBannerText: { color: "#073b4c", fontWeight: "500", fontSize: 13 },
+  floatingBannerText: {
+    color: "#073b4c", fontWeight: "600", fontSize: 13, textAlign: "center",
+  },
+  // maxWidth 70% evita que el botón "Confirmar punto de inicio" llegue
+  // hasta donde vive la columna derecha (bottomRightGroup, right: 20).
   confirmarPuntoButton: {
     position: "absolute", bottom: 170, alignSelf: "center",
-    backgroundColor: "#118ab2", paddingVertical: 16, paddingHorizontal: 28, borderRadius: 30,
-    flexDirection: "row", alignItems: "center", elevation: 8,
+    maxWidth: "70%",
+    backgroundColor: "#118ab2", paddingVertical: 14, paddingHorizontal: 22, borderRadius: 28,
+    flexDirection: "row", alignItems: "center", justifyContent: "center", elevation: 8,
   },
   confirmarPuntoButtonText: { color: "#ffffff", fontWeight: "bold", fontSize: 15 },
   // Pill de feedback "CALCULANDO RUTA..." — reemplaza al antiguo botón

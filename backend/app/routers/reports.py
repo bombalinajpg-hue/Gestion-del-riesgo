@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request
 from geoalchemy2.functions import ST_AsGeoJSON, ST_DWithin, ST_MakePoint, ST_SetSRID
 from sqlalchemy import cast, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,6 +24,7 @@ from geoalchemy2.types import Geography
 from app.auth import get_current_user
 from app.db import SessionLocal, get_db
 from app.models import CitizenReport, User
+from app.rate_limit import limiter
 from app.schemas import LatLng, ReportIn, ReportOut
 from app.services.clustering import recluster_municipio
 
@@ -49,7 +50,9 @@ def _point_wkt(lat: float, lng: float) -> str:
 
 
 @router.post("", response_model=ReportOut, status_code=201)
+@limiter.limit("10/minute")
 async def create_report(
+    request: Request,
     payload: ReportIn,
     background_tasks: BackgroundTasks,
     user: User = Depends(get_current_user),

@@ -10,6 +10,7 @@
 
 import { MaterialIcons } from "@expo/vector-icons";
 import * as Location from "expo-location";
+import { useRouter } from "expo-router";
 import React, { useEffect, useState } from "react";
 import {
   Alert,
@@ -27,6 +28,7 @@ import {
   buildShareMessage,
   createGroup,
   getAllGroups,
+  getGroup,
   joinGroup,
   leaveGroup,
   updateMyLocation,
@@ -42,6 +44,7 @@ interface Props {
 type Mode = "menu" | "create" | "join" | "view";
 
 export default function FamilyGroupModal({ visible, onClose }: Props) {
+  const router = useRouter();
   const [mode, setMode] = useState<Mode>("menu");
   const [groups, setGroups] = useState<FamilyGroup[]>([]);
   const [activeGroup, setActiveGroup] = useState<FamilyGroup | null>(null);
@@ -79,6 +82,27 @@ export default function FamilyGroupModal({ visible, onClose }: Props) {
       setMode("view");
     }
   };
+
+  // Polling cada 20 s mientras el modal esté abierto y viendo un grupo.
+  // Trae el detalle fresco del backend (estados y ubicaciones de todos
+  // los miembros) sin que el usuario tenga que cerrar y reabrir. Se
+  // detiene automáticamente al cerrar el modal o al salir de "view".
+  useEffect(() => {
+    if (!visible || mode !== "view" || !activeGroup) return;
+    const code = activeGroup.code;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const fresh = await getGroup(code);
+        if (!cancelled && fresh) setActiveGroup(fresh);
+      } catch {}
+    };
+    const interval = setInterval(tick, 20_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [visible, mode, activeGroup?.code]);
 
   useEffect(() => {
     if (!visible) {
@@ -182,6 +206,10 @@ export default function FamilyGroupModal({ visible, onClose }: Props) {
                 );
                 if (g) setActiveGroup(g);
               }
+            }}
+            onOpenOnMap={(code) => {
+              onClose();
+              router.push({ pathname: "/visor", params: { familyCode: code } });
             }}
           />
         )}
@@ -385,6 +413,7 @@ function GroupView({
   myUserId,
   onLeft,
   onUpdated,
+  onOpenOnMap,
 }: {
   group: FamilyGroup;
   // Null mientras carga — durante esa ventana no pintamos badge "Tú"
@@ -392,6 +421,7 @@ function GroupView({
   myUserId: string | null;
   onLeft: () => Promise<void>;
   onUpdated: () => Promise<void>;
+  onOpenOnMap: (code: string) => void;
 }) {
   const [sharingLocation, setSharingLocation] = useState(false);
 
@@ -414,7 +444,7 @@ function GroupView({
       });
       Alert.alert(
         "Ubicación compartida",
-        "Tu ubicación se actualizó en el grupo. (Nota: esta versión solo guarda localmente. Para sincronización entre miembros en tiempo real se requiere un backend.)",
+        "Tu ubicación se actualizó en el grupo. Todos los miembros podrán verla la próxima vez que abran el grupo familiar.",
       );
       await onUpdated();
     } catch {
@@ -491,8 +521,17 @@ function GroupView({
               : m.status === "need_help"
                 ? "Necesita ayuda"
                 : "Sin datos";
+        const hasLocation = m.lat !== undefined && m.lng !== undefined;
         return (
-          <View key={m.deviceId} style={styles.memberRow}>
+          <TouchableOpacity
+            key={m.deviceId}
+            style={styles.memberRow}
+            onPress={hasLocation ? () => onOpenOnMap(group.code) : undefined}
+            disabled={!hasLocation}
+            activeOpacity={hasLocation ? 0.7 : 1}
+            accessibilityRole={hasLocation ? "button" : undefined}
+            accessibilityLabel={hasLocation ? `Ver ubicación de ${m.name} en el mapa` : undefined}
+          >
             <View style={styles.memberAvatar}>
               <Text style={styles.memberInitial}>
                 {m.name.substring(0, 1).toUpperCase()}
@@ -507,13 +546,16 @@ function GroupView({
                 {statusEmoji} {statusLabel}
                 {m.lastUpdatedAt && ` · ${relativeTime(m.lastUpdatedAt)}`}
               </Text>
-              {m.lat !== undefined && m.lng !== undefined && (
+              {hasLocation && (
                 <Text style={styles.memberLoc}>
-                  📍 {m.lat.toFixed(4)}, {m.lng.toFixed(4)}
+                  📍 {m.lat!.toFixed(4)}, {m.lng!.toFixed(4)} · toca para ver en el mapa
                 </Text>
               )}
             </View>
-          </View>
+            {hasLocation && (
+              <MaterialIcons name="chevron-right" size={20} color="#94a3b8" />
+            )}
+          </TouchableOpacity>
         );
       })}
 

@@ -1011,7 +1011,7 @@ export default function DatosVisorScreen() {
               disabledHint="Primero elige un tipo de emergencia"
               hint={
                 emergencyType !== "ninguna" && showTime
-                  ? "Tiempo a refugio más cercano"
+                  ? "Tiempo a punto de encuentro más cercano"
                   : undefined
               }
             />
@@ -1086,8 +1086,8 @@ function labelForAlert(type: string): string {
     case "inundacion_local": return "Inundación puntual";
     case "deslizamiento_local": return "Deslizamiento";
     case "riesgo_electrico": return "Riesgo eléctrico";
-    case "refugio_saturado": return "Refugio saturado";
-    case "refugio_cerrado": return "Refugio cerrado";
+    case "refugio_saturado": return "Punto de encuentro saturado";
+    case "refugio_cerrado": return "Punto de encuentro cerrado";
     default: return "Alerta ciudadana";
   }
 }

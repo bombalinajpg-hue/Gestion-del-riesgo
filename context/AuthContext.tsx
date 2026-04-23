@@ -27,6 +27,7 @@ import {
 import {
   type AuthUser,
   onAuthStateChanged,
+  reloadAndGetCurrentUser,
   signInWithEmail,
   signOut as firebaseSignOut,
   signUpWithEmail,
@@ -43,6 +44,11 @@ interface AuthContextValue {
     displayName?: string,
   ) => Promise<void>;
   signOut: () => Promise<void>;
+  /** Forza un `reload()` del currentUser de Firebase y actualiza el
+   *  state local. Necesario tras una verificación de correo — Firebase
+   *  no avisa a los clientes cuando el `emailVerified` cambia en el
+   *  backend, así que hay que pedírselo explícitamente. */
+  refreshUser: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -110,9 +116,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await firebaseSignOut();
   }, []);
 
+  const refreshUser = useCallback(async () => {
+    try {
+      const fresh = await reloadAndGetCurrentUser();
+      setUser(fresh);
+    } catch (e) {
+      console.warn("[AuthContext] refreshUser falló:", e);
+    }
+  }, []);
+
   const value = useMemo<AuthContextValue>(
-    () => ({ user, loading, signIn, signUp, signOut }),
-    [user, loading, signIn, signUp, signOut],
+    () => ({ user, loading, signIn, signUp, signOut, refreshUser }),
+    [user, loading, signIn, signUp, signOut, refreshUser],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -19,6 +19,7 @@
 
 import type { Graph, GraphNode, LatLng, LocalRouteResult, RouteProfile } from '../types/graph';
 import { MinHeap } from './MinHeap';
+import { catastroEdgeMultiplier, type CatastroPenaltyOpts } from './catastroCostFactors';
 
 export interface DijkstraOptions {
   profile: RouteProfile;
@@ -42,6 +43,12 @@ export interface DijkstraOptions {
     /** Clave para saber qué capa de amenaza mirar en edge.hazardByType */
     emergencyType: Exclude<import('../types/graph').EmergencyType, 'ninguna'>;
   };
+  /**
+   * Factores catastrales (4A + 4B del anteproyecto): vulnerabilidad de
+   * obras lineales y riesgo predial adyacente. Se aplican solo al perfil
+   * `foot-walking` y cuando hay emergencia activa.
+   */
+  catastroPenalty?: CatastroPenaltyOpts;
 }
 
 /**
@@ -97,6 +104,11 @@ export function dijkstra(
             weight *= mult;
           }
         }
+      }
+
+      // Factores catastrales — vulnerabilidad vial + riesgo predial cercano.
+      if (opts.catastroPenalty) {
+        weight *= catastroEdgeMultiplier(edge, opts.profile, opts.catastroPenalty);
       }
 
       const v = graph.idToIndex[edge.to];
