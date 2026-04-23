@@ -19,6 +19,10 @@
     },
     "production": {
       "autoIncrement": true,
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
       "env": {
         "EXPO_PUBLIC_API_URL": "https://gestion-del-riesgo-production.up.railway.app"
       }
