@@ -349,31 +349,39 @@ export default function MapViewContainer() {
 
   // Google Maps SDK (Android) centra la cámara automáticamente al GPS
   // cuando `showsUserLocation` está activo y el GPS está fuera del
-  // `initialRegion`. Para el flujo "Elegir en el mapa" eso rompe la
-  // UX: el usuario va a tocar un punto EN Santa Rosa, no en su GPS
-  // (que puede estar en Pereira o donde haya instalado el APK).
+  // `initialRegion`. Esto rompe la UX en dos escenarios:
+  //   - Picking manual: el usuario va a tocar un punto EN Santa Rosa,
+  //     no en su GPS (que puede estar en Pereira o donde haya
+  //     instalado el APK).
+  //   - Flujo normal desde Home (GPS): al abrir /map el SDK a veces
+  //     salta al fix del usuario si cae fuera del initialRegion,
+  //     dejándolo viendo "todo el departamento" y obligando a zoom
+  //     manual — bug reportado como intermitente (depende del timing
+  //     del fix GPS vs primer render).
   //
-  // Cuando entramos en modo picking manual SIN ruta calculada, forzamos
-  // la cámara a la zona de estudio. Usamos un ref para disparar sólo
-  // en la transición a picking; si el usuario después mueve la cámara
-  // manualmente (ej. para buscar una calle específica), la dejamos.
-  const hasCenteredForPickingRef = useRef(false);
+  // Solución: apenas entramos al mapa SIN ruta activa, forzamos la
+  // cámara a la zona de estudio (independiente de startMode). Usamos
+  // un ref para disparar sólo en la transición; si el usuario después
+  // mueve la cámara manualmente (ej. para buscar una calle), la
+  // dejamos. Cuando hay una ruta calculada, el fit a la polyline
+  // (useEffect sobre routeCoords) se encarga del encuadre.
+  const hasCenteredInitialRef = useRef(false);
   useEffect(() => {
-    const inPickingMode = startMode === "manual" && !evacuando && routeCoords.length === 0;
-    if (!inPickingMode) {
-      hasCenteredForPickingRef.current = false;
+    const needsInitialCenter = !evacuando && routeCoords.length === 0;
+    if (!needsInitialCenter) {
+      hasCenteredInitialRef.current = false;
       return;
     }
-    if (hasCenteredForPickingRef.current) return;
+    if (hasCenteredInitialRef.current) return;
     // Delay breve para dejar que MapView termine su primer render antes
     // de que el SDK nativo intente saltar al GPS; sin esto, nuestro
     // animateToRegion puede ejecutarse antes y luego el SDK lo pisa.
     const t = setTimeout(() => {
       mapRef.current?.animateToRegion(initialRegion, 400);
-      hasCenteredForPickingRef.current = true;
+      hasCenteredInitialRef.current = true;
     }, 400);
     return () => clearTimeout(t);
-  }, [startMode, evacuando, routeCoords.length, initialRegion]);
+  }, [evacuando, routeCoords.length, initialRegion]);
 
   // Cambio de startMode: reset de puntoConfirmado y del startPoint si
   // vuelve a "gps". El limpiado de coords/rutaSugerida lo hace el hook.
@@ -552,8 +560,22 @@ export default function MapViewContainer() {
     const effectiveKind = hasSpecific ? "closest" : p.destChoice === "locked" ? "closest" : p.destChoice;
     setPendingDestKind(effectiveKind);
     setDestinationMode(effectiveKind === "closest" ? (hasSpecific ? "manual" : "closest") : "manual");
-    setPickingFromIsochroneMap(false);
-    setShowingInstitucionesOverlay(false);
+    // Activa el overlay de picking según la elección del usuario. Solo
+    // aplica en modo GPS: el punto de origen se auto-confirma apenas
+    // hay fix y el usuario puede ir directo a elegir destino en el
+    // heatmap/overlay de instituciones.
+    //
+    // En modo manual NO activamos acá — el picking bloquearía el
+    // banner "Toca el mapa..." y el onPress del MapView, dejando al
+    // usuario sin poder fijar su origen. El handler de "Confirmar
+    // punto de inicio" (en el render de este mismo componente) es
+    // quien activa picking/overlay tras la confirmación explícita,
+    // cerrando el orden correcto: elegir origen → confirmar → elegir
+    // destino en el heatmap.
+    const isGps = p.start === "gps";
+    setPickingFromIsochroneMap(isGps && effectiveKind === "heatmap");
+    setShowingInstitucionesOverlay(isGps && effectiveKind === "instituciones");
+    setShowIsochroneOverlay(isGps && effectiveKind === "heatmap");
 
     if (p.start === "gps") {
       setStartMode("gps");
@@ -622,7 +644,7 @@ export default function MapViewContainer() {
     quickRouteMode, setQuickRouteMode,
     autoRouteParam: autoRoute,
     graphReady, location,
-    startMode, startPoint, emergencyType, evacuando,
+    startMode, startPoint, puntoConfirmado, emergencyType, evacuando,
     destinoFinal, selectedDestination, selectedInstitucion,
     destinationMode,
     pickingFromIsochroneMap, showingInstitucionesOverlay,
@@ -1426,7 +1448,12 @@ const styles = StyleSheet.create({
     elevation: 10,
   },
   evacuaFabText: { color: "#fff", fontWeight: "800", fontSize: 16, letterSpacing: 0.5 },
-  legendPosition: { position: "absolute", right: 20, top: 420, zIndex: 10 },
+  // Centrada horizontalmente, en la franja inferior entre el FAB 123
+  // (right:20 bottom:24, ocupa hasta ~76) y los botones de la columna
+  // derecha (bottomRightGroup right:20 bottom:90). Como la leyenda
+  // queda centrada y los botones están anclados a la derecha, comparten
+  // altura vertical sin colisionar horizontalmente.
+  legendPosition: { position: "absolute", bottom: 100, alignSelf: "center", zIndex: 10 },
   // Banner flotante respeta márgenes laterales para no colisionar con
   // la columna de botones derecha (`bottomRightGroup`, right: 20) y se
   // alinea al centro con texto centrado — si el texto es largo, envuelve

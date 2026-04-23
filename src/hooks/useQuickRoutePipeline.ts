@@ -40,6 +40,7 @@ export interface UseQuickRoutePipelineParams {
   location: { latitude: number; longitude: number } | null;
   startMode: StartMode;
   startPoint: { lat: number; lng: number } | null;
+  puntoConfirmado: boolean;
   emergencyType: EmergencyType;
   evacuando: boolean;
   destinoFinal: DestinoFinal | null;
@@ -65,7 +66,7 @@ export function useQuickRoutePipeline(params: UseQuickRoutePipelineParams) {
   const {
     quickRouteMode, setQuickRouteMode,
     autoRouteParam, graphReady, location,
-    startMode, emergencyType, evacuando,
+    startMode, puntoConfirmado, emergencyType, evacuando,
     destinoFinal, selectedDestination, selectedInstitucion,
     pickingFromIsochroneMap, showingInstitucionesOverlay,
     pendingDestKind, setPendingDestKind,
@@ -152,9 +153,20 @@ export function useQuickRoutePipeline(params: UseQuickRoutePipelineParams) {
   // Requiere graphReady+location porque calcularRuta retorna early sin
   // ellos — y si dejamos que el ref de un solo disparo se marque antes
   // de que el cálculo sea posible, el flujo queda bloqueado.
+  //
+  // En modo manual el usuario debe confirmar explícitamente su punto de
+  // inicio antes de que Case C dispare: si arranca apenas hay
+  // `destinoFinal`, el cálculo usa el GPS e ignora la elección manual
+  // del origen (bug reportado al abrir /map desde el Visor con "Elegir
+  // en el mapa": el GPS resolvía y la ruta salía sola antes del tap).
+  // Por eso el guard bloquea Case C solo mientras `puntoConfirmado`
+  // sigue en false — una vez el usuario toca "Confirmar punto de
+  // inicio" (o Case A auto-confirma en GPS), Case C corre normal y
+  // dispara el cálculo al elegir destino en heatmap/instituciones.
   useEffect(() => {
     if (actionFiredRef.current) return;
     if (!quickRouteMode) return;
+    if (startMode === "manual" && !puntoConfirmado) return;
     if (!destinoFinal) return;
     if (evacuando) return;
     if (!graphReady || !location) return;
@@ -169,7 +181,7 @@ export function useQuickRoutePipeline(params: UseQuickRoutePipelineParams) {
     }, 200);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [quickRouteMode, destinoFinal, evacuando, graphReady, location, selectedDestination, selectedInstitucion]);
+  }, [quickRouteMode, startMode, puntoConfirmado, destinoFinal, evacuando, graphReady, location, selectedDestination, selectedInstitucion]);
 
   /** Rearma explícitamente los refs de "un solo disparo". Los handlers
    *  que activan el flujo rápido deben llamarlo ANTES de

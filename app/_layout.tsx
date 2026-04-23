@@ -26,6 +26,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { AuthProvider, useAuth } from "../context/AuthContext";
 import { RouteProvider, useRouteContext } from "../context/RouteContext";
+import { VisorProvider } from "../context/VisorContext";
 import { api } from "../src/services/api";
 import { clearMeCache } from "../src/services/apiMe";
 import { useMunicipio } from "../src/hooks/useMunicipio";
@@ -107,6 +108,7 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <AuthProvider>
         <RouteProvider>
+          <VisorProvider>
           <StatusBar style="auto" />
           <AuthGate>
             <Stack
@@ -128,6 +130,7 @@ export default function RootLayout() {
               <Stack.Screen name="about" />
             </Stack>
           </AuthGate>
+          </VisorProvider>
         </RouteProvider>
       </AuthProvider>
     </SafeAreaProvider>

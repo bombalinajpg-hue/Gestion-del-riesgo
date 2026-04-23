@@ -247,7 +247,8 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#f1f5f9" },
   // Header estético con fondo teal (acento de la paleta),
   // ícono en chip translúcido y título + subtítulo con buena jerarquía.
-  // Reemplaza el header blanco plano sin aire que reportó la usuaria.
+  // Bordes rectos por decisión de diseño (coherente con el BottomNavBar
+  // que también es recto — evita la asimetría visual entre top y bottom).
   titleBar: {
     flexDirection: "row",
     alignItems: "center",
@@ -256,8 +257,6 @@ const styles = StyleSheet.create({
     paddingTop: 18,
     paddingBottom: 20,
     backgroundColor: "#0f766e",
-    borderBottomLeftRadius: 22,
-    borderBottomRightRadius: 22,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.15,

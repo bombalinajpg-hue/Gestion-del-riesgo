@@ -27,6 +27,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { getGroup as getFamilyGroup } from "../src/services/familyGroupsService";
 import { getRefugeByName } from "../src/services/refugesService";
 import type { FamilyGroup, FamilyMember, RefugeDetails } from "../src/types/v4";
+import { useVisorContext } from "../context/VisorContext";
 import RefugeDetailsModal from "./RefugeDetailsModal";
 import StreetViewModal from "./StreetViewModal";
 
@@ -110,18 +111,24 @@ export default function MapVisorContainer() {
   const [familyGroup, setFamilyGroup] = useState<FamilyGroup | null>(null);
   const [mapType, setMapType] = useState<MapType>("hybrid");
   const [showMapTypePicker, setShowMapTypePicker] = useState(false);
-  const [emergencyType, setEmergencyType] = useState<EmergencyType>("ninguna");
   const [showEmergenciaPicker, setShowEmergenciaPicker] = useState(false);
 
+  // Estado de toggles + emergencia + región del mapa vive en VisorContext
+  // (arriba del árbol) para que sobreviva al desmontaje de la pantalla
+  // cuando el usuario navega a otra tab y vuelve.
+  const {
+    showElementosExpuestos, setShowElementosExpuestos,
+    showPrediosRiesgo, setShowPrediosRiesgo,
+    showPendiente, setShowPendiente,
+    showPuntosEncuentro, setShowPuntosEncuentro,
+    showInstituciones, setShowInstituciones,
+    emergencyType, setEmergencyType,
+    savedRegion, setSavedRegion,
+    hasForcedInitialCenter, markForcedInitialCenterDone,
+    resetAll: resetVisorState,
+  } = useVisorContext();
+
   const [catastroPanelOpen, setCatastroPanelOpen] = useState(false);
-  // Defaults en `false` — al abrir el Visor el mapa arranca limpio,
-  // mostrando solo las calles y el bbox de Santa Rosa. El usuario
-  // activa explícitamente cada capa desde el panel de capas.
-  const [showElementosExpuestos, setShowElementosExpuestos] = useState(false);
-  const [showPrediosRiesgo, setShowPrediosRiesgo] = useState(false);
-  const [showPendiente, setShowPendiente] = useState(false);
-  const [showPuntosEncuentro, setShowPuntosEncuentro] = useState(false);
-  const [showInstituciones, setShowInstituciones] = useState(false);
   const [exposicionModalOpen, setExposicionModalOpen] = useState(false);
 
   // "Ir aquí": al tocar un pin (punto de encuentro o institución) abrimos
@@ -136,15 +143,51 @@ export default function MapVisorContainer() {
   // F4 este flujo existía vía RefugeDetailsModal; F4 lo reemplazó con
   // un callout directo que perdía la opción de Street View — se
   // reintrodujo como el componente esperado.
+  // Datos del pin actualmente seleccionado. Permanecen aunque se cierre
+  // el modal — porque el StreetView, que abre DESPUÉS del detalle,
+  // necesita las coords/nombre del mismo pin. Al abrir otro pin se
+  // sobrescriben via `openMarkerDetail`.
   const [detailRefuge, setDetailRefuge] = useState<RefugeDetails | null>(null);
   const [detailLockedDest, setDetailLockedDest] = useState<LockedDestination | null>(null);
   const [detailCoords, setDetailCoords] = useState<{ lat: number; lng: number } | null>(null);
+  // Flag de visibilidad del RefugeDetailsModal, desacoplado de los datos.
+  // Android no soporta dos Modals abiertos simultáneamente; este flag
+  // permite cerrar el detalle antes de abrir StreetView (o el sheet
+  // Evacua) sin perder los datos que esos modales necesitan.
+  const [detailModalVisible, setDetailModalVisible] = useState(false);
   const [streetViewOpen, setStreetViewOpen] = useState(false);
 
   const anyCatastroLayerActive = useMemo(
     () => showElementosExpuestos || showPrediosRiesgo || showPendiente,
     [showElementosExpuestos, showPrediosRiesgo, showPendiente],
   );
+
+  // Google Maps SDK Android ignora `initialRegion` en re-mounts y salta
+  // al GPS del usuario (o a una región default del mundo). Para
+  // garantizar que el mapa siempre arranque donde debe:
+  //
+  //  - Primera vez en la sesión (no hay `savedRegion`): animamos al
+  //    bbox de Santa Rosa con duración 400 ms, para que se vea como
+  //    una intro intencional.
+  //  - Re-montajes siguientes (venimos de otra tab): animamos al
+  //    `savedRegion` con duración 0 — instantáneo, sin flicker visual.
+  //
+  // El ref local `hasAppliedThisMountRef` garantiza que esto dispara
+  // una sola vez por montaje, aunque `savedRegion` cambie después por
+  // interacción del usuario.
+  const hasAppliedThisMountRef = useRef(false);
+  useEffect(() => {
+    if (hasAppliedThisMountRef.current) return;
+    hasAppliedThisMountRef.current = true;
+    const target = savedRegion ?? INITIAL_REGION;
+    const duration = hasForcedInitialCenter ? 0 : 400;
+    const t = setTimeout(() => {
+      mapRef.current?.animateToRegion(target, duration);
+      if (!hasForcedInitialCenter) markForcedInitialCenterDone();
+    }, 400);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleMyLocation = async () => {
     try {
@@ -164,16 +207,12 @@ export default function MapVisorContainer() {
   };
 
   // "Limpiar mapa" DESACTIVA todas las capas y re-centra sobre la zona
-  // de estudio. El comportamiento anterior (setters a true) reactivaba
-  // las capas en lugar de apagarlas — bug reportado por el usuario.
+  // de estudio. Delega el reset de capas al context para que el cambio
+  // sea consistente desde cualquier otro componente que también lo use
+  // en el futuro.
   const handleResetMapView = () => {
     mapRef.current?.animateToRegion(INITIAL_REGION, 500);
-    setShowElementosExpuestos(false);
-    setShowPrediosRiesgo(false);
-    setShowPendiente(false);
-    setShowPuntosEncuentro(false);
-    setShowInstituciones(false);
-    setEmergencyType("ninguna");
+    resetVisorState();
     setFamilyGroup(null);
   };
 
@@ -236,6 +275,10 @@ export default function MapVisorContainer() {
     };
   }, [familyCodeParam]);
 
+  /** Abre el sheet de 3 preguntas con el destino ya fijado. Al
+   *  confirmar, `handleEvacuaConfirm` navega a `/map` para que el
+   *  módulo Evacua calcule y dibuje la ruta — el Visor se mantiene
+   *  dedicado a exploración de capas, no hace ruteo. */
   const openRouteFromMarker = (dest: LockedDestination) => {
     setLockedDest(dest);
     setEvacuaSheetOpen(true);
@@ -258,14 +301,21 @@ export default function MapVisorContainer() {
     setDetailRefuge(refuge);
     setDetailCoords({ lat, lng });
     setDetailLockedDest(lockedDest);
+    setDetailModalVisible(true);
   };
 
+  // Cierra el modal pero PRESERVA los datos — porque StreetView o el
+  // sheet Evacua pueden abrirse a continuación y siguen necesitando
+  // `detailRefuge`, `detailCoords`, `detailLockedDest`. Los datos se
+  // sobrescriben cuando el usuario toca otro pin.
   const closeMarkerDetail = () => {
-    setDetailRefuge(null);
-    setDetailCoords(null);
-    setDetailLockedDest(null);
+    setDetailModalVisible(false);
   };
 
+  /** Handler del sheet en el Visor. Setea el contexto y navega a /map
+   *  para que el módulo Evacua haga el cálculo y el tracking. Mantener
+   *  el ruteo en /map evita duplicar la lógica y deja al Visor
+   *  enfocado en exploración de capas. */
   const handleEvacuaConfirm = (p: ConfirmPayload) => {
     setEvacuaSheetOpen(false);
     routeCtx.setSelectedDestination(p.shelter ?? null);
@@ -321,7 +371,11 @@ export default function MapVisorContainer() {
         ref={mapRef}
         style={styles.map}
         mapType={mapType}
-        initialRegion={INITIAL_REGION}
+        // Usa la región guardada si existe (preserva la vista del
+        // usuario entre navegaciones de tab). Fallback al bbox de
+        // Santa Rosa en el primer montaje de la sesión.
+        initialRegion={savedRegion ?? INITIAL_REGION}
+        onRegionChangeComplete={(region) => setSavedRegion(region)}
         showsUserLocation
         showsMyLocationButton={false}
         showsCompass={false}
@@ -427,6 +481,9 @@ export default function MapVisorContainer() {
                 }}
               />
             ))}
+
+        {/* Ruta exploratoria. Se pinta cuando el usuario tocó "Ir aquí"
+            en el RefugeDetailsModal de algún pin. */}
       </MapView>
 
       {/* Controles superiores — solo map type picker */}
@@ -569,19 +626,31 @@ export default function MapVisorContainer() {
         </TouchableWithoutFeedback>
       </Modal>
 
-      {/* Modal de detalle al tocar un pin. Expone "Ir aquí" (navega
-          vía QuickEvacuateSheet) y "Vista 360" (StreetViewModal). */}
+      {/* Modal de detalle al tocar un pin. Expone "Ir aquí" (abre el
+          sheet de 3 preguntas → /map) y "Vista 360" (StreetViewModal).
+          Visibilidad controlada por `detailModalVisible` (no por la
+          existencia de datos) para que al cerrar se puedan abrir otros
+          Modals sin que los datos se pierdan — Android no soporta dos
+          Modals visibles al mismo tiempo. */}
       <RefugeDetailsModal
-        visible={detailRefuge !== null}
+        visible={detailModalVisible}
         refuge={detailRefuge}
         onClose={closeMarkerDetail}
         onNavigate={() => {
           if (detailLockedDest) {
             closeMarkerDetail();
-            openRouteFromMarker(detailLockedDest);
+            // Delay pequeño para que Android termine de cerrar el
+            // modal actual antes de abrir el sheet. Sin esto el sheet
+            // no aparece y queda un estado fantasma donde el usuario
+            // debe tocar de nuevo para re-disparar el abrir.
+            setTimeout(() => openRouteFromMarker(detailLockedDest), 250);
           }
         }}
-        onStreetView={() => setStreetViewOpen(true)}
+        onStreetView={() => {
+          closeMarkerDetail();
+          // Mismo patrón: cerrar antes de abrir el siguiente Modal.
+          setTimeout(() => setStreetViewOpen(true), 250);
+        }}
       />
 
       {/* Street View del destino seleccionado. Se monta sobre el
@@ -617,8 +686,8 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#f1f5f9" },
   map: { flex: 1 },
   // Header estético con fondo teal. La altura ya no es fija — crece con
-  // el padding para dar aire al título/subtítulo. El offset del chip
-  // flotante (`top: insets.top + 68`) calza bien con este header.
+  // el padding para dar aire al título/subtítulo. Bordes rectos por
+  // coherencia con el BottomNavBar (ambos extremos rectos).
   titleBar: {
     flexDirection: "row",
     alignItems: "center",
@@ -627,8 +696,6 @@ const styles = StyleSheet.create({
     paddingTop: 18,
     paddingBottom: 20,
     backgroundColor: "#0f766e",
-    borderBottomLeftRadius: 22,
-    borderBottomRightRadius: 22,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.15,

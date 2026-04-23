@@ -18,7 +18,6 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TouchableWithoutFeedback,
   View,
 } from "react-native";
 import type { EmergencyType } from "../src/types/graph";
@@ -90,48 +89,60 @@ export default function ExposicionCatastralModal({
       animationType="slide"
       onRequestClose={onClose}
     >
-      <TouchableWithoutFeedback onPress={onClose}>
-        <View style={styles.overlay}>
-          <TouchableWithoutFeedback>
-            <View style={styles.sheet}>
-              <View style={styles.handle} />
-              <View style={styles.header}>
-                <Text style={styles.title}>Cuantificación del riesgo</Text>
-                <Pressable onPress={onClose} hitSlop={10}>
-                  <MaterialIcons name="close" size={22} color="#475569" />
-                </Pressable>
-              </View>
-              <Text style={styles.fuenteLine}>
-                Fuente: {data.fuente}
-              </Text>
-              <Text style={styles.metaLine}>
-                Escala {data.escala} · Datum original: {data.datumOriginal}
-              </Text>
+      {/* Overlay y sheet son View simples — SIN wrappers tocables.
+          Probamos antes con TouchableWithoutFeedback y después con
+          Pressable anidado: ambos bloquean el drag del ScrollView
+          interno en Android (cada uno reclama el gesture responder a
+          su manera y el scroll nunca lo recibe). El patrón nativo de
+          Google/Samsung en bottom sheets con contenido largo es NO
+          permitir "tap fuera para cerrar"; el cierre se hace con el
+          botón X o con el botón Back (Android lo maneja vía
+          `onRequestClose` del Modal). */}
+      <View style={styles.overlay}>
+        <View style={styles.sheet}>
+          <View style={styles.handle} />
+          <View style={styles.header}>
+            <Text style={styles.title}>Cuantificación del riesgo</Text>
+            <Pressable onPress={onClose} hitSlop={10}>
+              <MaterialIcons name="close" size={22} color="#475569" />
+            </Pressable>
+          </View>
+          <Text style={styles.fuenteLine}>
+            Fuente: {data.fuente}
+          </Text>
+          <Text style={styles.metaLine}>
+            Escala {data.escala} · Datum original: {data.datumOriginal}
+          </Text>
 
-              <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
-                {emergenciasAMostrar.map((key) => {
-                  const stats = data.porEmergencia[key];
-                  if (!stats) return null;
-                  return (
-                    <EmergenciaCard
-                      key={key}
-                      nombre={EMERGENCIA_LABELS[key] || key}
-                      stats={stats}
-                    />
-                  );
-                })}
+          <ScrollView
+            style={styles.scroll}
+            // `nestedScrollEnabled` en Android garantiza que este
+            // ScrollView recibe gestos aunque viva dentro de otro
+            // componente que podría interpretar el gesture.
+            nestedScrollEnabled
+            showsVerticalScrollIndicator={false}
+          >
+            {emergenciasAMostrar.map((key) => {
+              const stats = data.porEmergencia[key];
+              if (!stats) return null;
+              return (
+                <EmergenciaCard
+                  key={key}
+                  nombre={EMERGENCIA_LABELS[key] || key}
+                  stats={stats}
+                />
+              );
+            })}
 
-                <Text style={styles.footerNote}>
-                  Cifras derivadas del cruce espacial entre capas de Riesgo y
-                  Vulnerabilidad de Edificaciones del EDAVR (Decreto 1807/2014).
-                  Los valores catastrales y de mercado corresponden al inventario
-                  predial oficial levantado por ALDESARROLLO.
-                </Text>
-              </ScrollView>
-            </View>
-          </TouchableWithoutFeedback>
+            <Text style={styles.footerNote}>
+              Cifras derivadas del cruce espacial entre capas de Riesgo y
+              Vulnerabilidad de Edificaciones del EDAVR (Decreto 1807/2014).
+              Los valores catastrales y de mercado corresponden al inventario
+              predial oficial levantado por ALDESARROLLO.
+            </Text>
+          </ScrollView>
         </View>
-      </TouchableWithoutFeedback>
+      </View>
     </Modal>
   );
 }

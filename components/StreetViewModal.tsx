@@ -68,11 +68,16 @@ export default function StreetViewModal({
     }
     setLoading(true);
     setTimedOut(false);
-    // Si a los 10s seguimos cargando, mostrar fallback
+    // Si a los 5 s seguimos cargando, mostrar fallback. Bajado desde
+    // 10 s porque en Expo Go la API key restringida rechaza el request
+    // casi inmediatamente (Google responde con error o silenciosamente
+    // nunca manda el iframe); esperar 10 s bloqueaba la UI sin motivo.
+    // En el APK, si Google tiene cobertura responde en 1-3 s; 5 s es
+    // margen razonable.
     timerRef.current = setTimeout(() => {
       setTimedOut(true);
       setLoading(false);
-    }, 10_000);
+    }, 5_000);
     return () => { if (timerRef.current) clearTimeout(timerRef.current); };
   }, [visible, latitude, longitude]);
 
