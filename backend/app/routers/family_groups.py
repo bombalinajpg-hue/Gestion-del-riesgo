@@ -28,7 +28,7 @@ import logging
 import secrets
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from geoalchemy2.functions import ST_AsGeoJSON
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -37,7 +37,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import get_current_user
 from app.db import get_db
 from app.models import FamilyGroup, GroupMember, MemberStatus, User
-from app.rate_limit import limiter
 from app.schemas import (
     GroupDetail,
     GroupIn,
@@ -129,9 +128,7 @@ async def _load_members(
 # ─── Endpoints ──────────────────────────────────────────────────────
 
 @router.post("", response_model=GroupDetail, status_code=201)
-@limiter.limit("10/minute")
 async def create_group(
-    request: Request,
     payload: GroupIn,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -191,9 +188,7 @@ async def create_group(
 
 
 @router.post("/join", response_model=GroupDetail)
-@limiter.limit("20/minute")
 async def join_group(
-    request: Request,
     payload: GroupJoinIn,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -286,9 +281,7 @@ async def group_detail(
 
 
 @router.patch("/{code}/members/me", response_model=MemberOut)
-@limiter.limit("60/minute")
 async def update_my_membership(
-    request: Request,
     code: str,
     payload: MemberLocationUpdate,
     user: User = Depends(get_current_user),

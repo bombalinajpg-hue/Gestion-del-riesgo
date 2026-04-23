@@ -148,14 +148,15 @@ function EmergenciaCard({
     <View style={styles.card}>
       <Text style={styles.cardTitle}>{nombre}</Text>
 
+      {/* Métricas agregadas por emergencia. Se removió la columna
+          "Vulnerables" con desglose de niños/adultos mayores/personas
+          con discapacidad: eran datos individuales sensibles que no
+          debían mostrarse al público. El análisis agregado queda
+          representado por Edificaciones + Personas (ocupación máxima)
+          + los valores catastrales más abajo. */}
       <View style={styles.bigRow}>
         <Metric label="Edificaciones" value={String(t.numEdificaciones)} />
         <Metric label="Personas" value={String(t.poblacionOcupacionMax)} />
-        <Metric
-          label="Vulnerables"
-          value={String(t.poblacionVulnerable)}
-          hint={`${t.niños} niños · ${t.adultosMayores} mayores · ${t.personasConDiscapacidad} discap.`}
-        />
       </View>
 
       <View style={styles.valoresBox}>

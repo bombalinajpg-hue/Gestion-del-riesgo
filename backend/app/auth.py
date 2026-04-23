@@ -136,6 +136,19 @@ async def get_current_user(
     display_name: str | None = decoded.get("name")
     photo_url: str | None = decoded.get("picture")
 
+    # Role a asignar según la whitelist de admin_emails del config.
+    # Si el correo del user está en `settings.admin_emails_set` → admin.
+    # Si no → citizen. Un user que era admin y se sacó del whitelist
+    # queda automáticamente degradado al siguiente request.
+    #
+    # Esto sustituye a un endpoint de "dar rol admin" explícito: la
+    # fuente de verdad es la env var `ADMIN_EMAILS` de Railway.
+    desired_role = (
+        UserRole.admin
+        if email and email.lower() in settings.admin_emails_set
+        else UserRole.citizen
+    )
+
     # Upsert del user. Usamos `ON CONFLICT` implícito via 2-pass para
     # simplicidad; si escala mucho pasamos a `INSERT ... ON CONFLICT`
     # nativo de Postgres.
@@ -149,7 +162,7 @@ async def get_current_user(
             email=email,
             display_name=display_name,
             photo_url=photo_url,
-            role=UserRole.citizen,
+            role=desired_role,
         )
         db.add(user)
         await db.commit()
@@ -165,6 +178,11 @@ async def get_current_user(
             user.display_name = display_name; changed = True
         if photo_url and user.photo_url != photo_url:
             user.photo_url = photo_url; changed = True
+        # Sincronizar rol con la whitelist. Conserva `staff` (rol
+        # intermedio asignado manualmente en DB); solo promociona a admin
+        # o degrada desde admin a citizen según la env var.
+        if user.role != UserRole.staff and user.role != desired_role:
+            user.role = desired_role; changed = True
         if changed:
             await db.commit()
 

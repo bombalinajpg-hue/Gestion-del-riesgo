@@ -12,17 +12,24 @@ import json
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from geoalchemy2.functions import ST_AsGeoJSON, ST_DWithin, ST_MakePoint, ST_SetSRID
 from geoalchemy2.types import Geography
 from sqlalchemy import cast, select
 from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth import get_current_user
 from app.config import settings
 from app.db import get_db
-from app.models import PublicAlert
+from app.models import PublicAlert, User, UserRole
 from app.schemas import AlertOut, LatLng
 from app.services.clustering import recluster_municipio
+
+# Scheme Bearer opcional — si el caller manda el header `X-Admin-Secret`
+# puede pasarse sin Authorization. Si en cambio quiere autenticarse como
+# admin humano, manda Bearer token de Firebase.
+_bearer_optional = HTTPBearer(auto_error=False)
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
 
@@ -99,33 +106,52 @@ async def alerts_near(
 async def recompute_alerts(
     municipio_id: UUID = Query(...),
     x_admin_secret: str | None = Header(default=None, alias="X-Admin-Secret"),
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_optional),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Re-calcula `public_alerts` a partir de `citizen_reports` recientes
-    del municipio dado.
+    """Re-calcula `public_alerts` a partir de `citizen_reports` recientes.
 
-    Endpoint protegido con un "pre-shared key": el caller debe enviar el
-    header `X-Admin-Secret` con un valor que coincida con la variable de
-    entorno `ADMIN_SECRET` del backend. Si la variable no está configurada,
-    el endpoint responde 403 a todos (fail-closed).
+    Acepta DOS formas de autenticación (cualquiera vale):
 
-    Esto sustituye al antiguo gate por `Depends(get_current_user)`, que
-    permitía que cualquier ciudadano autenticado disparara el recálculo
-    — una operación pesada que podía usarse como vector de DoS. Ahora
-    solo lo puede llamar quien tenga el secret (típicamente un cron de
-    ops o un admin operando manualmente).
+    1. **Header `X-Admin-Secret`** con valor coincidente a la env var
+       `ADMIN_SECRET` del backend. Pensado para crons externos o scripts
+       sin sesión (p.ej. un job programado que reclusteriza cada hora).
+
+    2. **Bearer token Firebase** de un usuario cuyo correo esté en la
+       whitelist `ADMIN_EMAILS` del backend. Pensado para administradores
+       humanos que operan desde su cuenta (ej. disparar recompute desde
+       un dashboard futuro) sin tener que copiar el secret.
+
+    Si ninguna de las dos se cumple → 403. Si `ADMIN_SECRET` y
+    `ADMIN_EMAILS` están ambas vacías → 403 a todos (fail-closed).
 
     La app cliente NO llama este endpoint: el clustering del feed local
     se hace en el dispositivo (`reportsService.recomputePublicAlerts`).
     """
-    expected = settings.admin_secret
-    if not expected or not x_admin_secret or not hmac.compare_digest(
-        x_admin_secret, expected
-    ):
-        # `hmac.compare_digest` evita timing attacks al comparar el secret.
+    # Camino 1: admin secret. `hmac.compare_digest` evita timing attacks.
+    expected_secret = settings.admin_secret
+    secret_ok = bool(
+        expected_secret
+        and x_admin_secret
+        and hmac.compare_digest(x_admin_secret, expected_secret)
+    )
+
+    # Camino 2: Bearer de un admin logueado (email en whitelist).
+    admin_user_ok = False
+    if not secret_ok and credentials is not None:
+        try:
+            user = await get_current_user(credentials=credentials, db=db)
+            admin_user_ok = user.role == UserRole.admin
+        except HTTPException:
+            # Token inválido o expirado: tratamos como no-auth; si el
+            # secret tampoco vino, caerá al 403 de abajo.
+            admin_user_ok = False
+
+    if not secret_ok and not admin_user_ok:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin secret inválido o endpoint deshabilitado.",
+            detail="Requiere X-Admin-Secret válido o sesión de administrador.",
         )
+
     count = await recluster_municipio(db, municipio_id)
     return {"count": count, "municipio_id": str(municipio_id)}

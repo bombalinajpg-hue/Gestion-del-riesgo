@@ -331,7 +331,7 @@ export default function HomeScreen() {
               </View>
               <Text
                 style={styles.emergencyToolLabel}
-                numberOfLines={2}
+                numberOfLines={1}
                 adjustsFontSizeToFit
                 minimumFontScale={0.85}
               >Mi estado</Text>
@@ -349,7 +349,7 @@ export default function HomeScreen() {
               </View>
               <Text
                 style={styles.emergencyToolLabel}
-                numberOfLines={2}
+                numberOfLines={1}
                 adjustsFontSizeToFit
                 minimumFontScale={0.85}
               >Familia</Text>
@@ -367,9 +367,9 @@ export default function HomeScreen() {
               </View>
               <Text
                 style={styles.emergencyToolLabel}
-                numberOfLines={2}
+                numberOfLines={1}
                 adjustsFontSizeToFit
-                minimumFontScale={0.75}
+                minimumFontScale={0.85}
               >Desaparecido</Text>
             </TouchableOpacity>
 
@@ -385,18 +385,56 @@ export default function HomeScreen() {
               </View>
               <Text
                 style={styles.emergencyToolLabel}
-                numberOfLines={2}
+                numberOfLines={1}
                 adjustsFontSizeToFit
                 minimumFontScale={0.85}
               >Reportar</Text>
             </TouchableOpacity>
           </View>
 
-          {/* ── MÓDULOS SECUNDARIOS (grid 2×n) ──────────────────────────
-              Se sacan del grid: `routes` (vive en CTA "Evacua"),
-              `emergency` (sus herramientas están en la fila de arriba),
-              `statistics` (promovido al Visor card). */}
-          <Text style={styles.sectionTitle}>Todas las herramientas</Text>
+          {/* ── BLOQUE LÍNEAS DE EMERGENCIA ───────────────────────────
+              Orden pedido por la usuaria: Emergencia → Líneas → Otras.
+              Las líneas quedan justo después de "Durante la emergencia"
+              porque son la acción ciudadana más primitiva (marcar 123
+              cuando algo ya pasó). */}
+          <Text style={styles.sectionTitle}>Líneas de emergencia</Text>
+          <View style={styles.emergencyRow}>
+            {EMERGENCY_NUMBERS.map((num) => (
+              <TouchableOpacity
+                key={num.label}
+                style={styles.emergencyTool}
+                onPress={() => {
+                  Alert.alert(
+                    `Llamar a ${num.label}`,
+                    `¿Deseas llamar al ${num.number}?`,
+                    [
+                      { text: "Cancelar", style: "cancel" },
+                      { text: "Llamar", onPress: () => Linking.openURL(`tel:${num.number}`) },
+                    ],
+                  );
+                }}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel={`Llamar a ${num.label} ${num.number}`}
+              >
+                <View style={[styles.emergencyToolIcon, { backgroundColor: num.bg }]}>
+                  <MaterialIcons name={num.icon} size={22} color={num.color} />
+                </View>
+                <Text
+                  style={styles.emergencyToolLabel}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.85}
+                >{num.label}</Text>
+                <Text style={styles.emergencyNumber}>{num.number}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          {/* ── OTRAS HERRAMIENTAS (grid 2×n) ──────────────────────────
+              Renombrado de "Todas las herramientas" → "Otras" porque
+              Evacúa, Durante la emergencia y Líneas ya están arriba. */}
+          <Text style={styles.sectionTitle}>Otras herramientas</Text>
           <View style={styles.grid}>
             {MODULES.filter((m) =>
               m.id !== "routes" && m.id !== "emergency" && m.id !== "statistics"
@@ -423,41 +461,6 @@ export default function HomeScreen() {
                 </View>
                 <Text style={styles.gridTitle}>{mod.title}</Text>
                 <Text style={styles.gridSubtitle}>{mod.subtitle}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-
-          {/* ── BLOQUE NÚMEROS DE EMERGENCIA ─────────────────────────── */}
-          <Text style={styles.sectionTitle}>Líneas de emergencia</Text>
-          <View style={styles.emergencyRow}>
-            {EMERGENCY_NUMBERS.map((num) => (
-              <TouchableOpacity
-                key={num.label}
-                style={styles.emergencyTool}
-                onPress={() => {
-                  Alert.alert(
-                    `Llamar a ${num.label}`,
-                    `¿Deseas llamar al ${num.number}?`,
-                    [
-                      { text: "Cancelar", style: "cancel" },
-                      { text: "Llamar", onPress: () => Linking.openURL(`tel:${num.number}`) },
-                    ],
-                  );
-                }}
-                activeOpacity={0.8}
-                accessibilityRole="button"
-                accessibilityLabel={`Llamar a ${num.label} ${num.number}`}
-              >
-                <View style={[styles.emergencyToolIcon, { backgroundColor: num.bg }]}>
-                  <MaterialIcons name={num.icon} size={22} color={num.color} />
-                </View>
-                <Text
-                  style={styles.emergencyToolLabel}
-                  numberOfLines={2}
-                  adjustsFontSizeToFit
-                  minimumFontScale={0.75}
-                >{num.label}</Text>
-                <Text style={styles.emergencyNumber}>{num.number}</Text>
               </TouchableOpacity>
             ))}
           </View>
@@ -648,18 +651,24 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
 
-  // ─── Fila de "Durante la emergencia" ───
+  // ─── Grid 2×2 de "Durante la emergencia" y "Líneas de emergencia" ───
+  // Antes era 1 fila × 4 columnas — en pantallas de 360–380 px las
+  // palabras largas (Desaparecido, Bomberos + número) hacían word-break
+  // feo (p.ej. "Desapar\necido"). Con 2×2 cada card gana ~2× de ancho
+  // y los labels caben en una sola línea.
   emergencyRow: {
     flexDirection: "row",
+    flexWrap: "wrap",
     gap: 10,
     marginHorizontal: 16,
   },
   emergencyTool: {
-    flex: 1,
+    flexBasis: "47%",
+    flexGrow: 1,
     backgroundColor: "#fff",
     borderRadius: 14,
-    paddingVertical: 14,
-    paddingHorizontal: 8,
+    paddingVertical: 18,
+    paddingHorizontal: 12,
     alignItems: "center",
     borderWidth: 1,
     borderColor: "#e2e8f0",

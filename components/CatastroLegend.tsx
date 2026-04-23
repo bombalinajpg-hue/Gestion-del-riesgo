@@ -12,6 +12,7 @@
  */
 
 import { StyleSheet, Text, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 interface Props {
   showElementos: boolean;
@@ -39,11 +40,17 @@ export default function CatastroLegend({
   showPredios,
   showPendiente,
 }: Props) {
+  const insets = useSafeAreaInsets();
   const mostrarNivel = showElementos || showPredios;
   if (!mostrarNivel && !showPendiente) return null;
 
+  // Respeta el BottomNavBar (~64) + safe-area inferior. El valor
+  // anterior `bottom: 100` quedaba oculto parcialmente en teléfonos
+  // con notch inferior (Samsung/Pixel con gesture bar).
+  const bottomOffset = 64 + insets.bottom + 12;
+
   return (
-    <View style={styles.container} pointerEvents="none">
+    <View style={[styles.container, { bottom: bottomOffset }]} pointerEvents="none">
       {mostrarNivel && (
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>
@@ -84,6 +91,9 @@ const styles = StyleSheet.create({
   container: {
     position: "absolute",
     left: 12,
+    // `bottom` se sobreescribe en runtime con `insets.bottom + 76` para
+    // respetar el BottomNavBar. Este valor default es fallback si el
+    // hook de insets todavía no resolvió al primer render.
     bottom: 100,
     zIndex: 15,
     backgroundColor: "rgba(255,255,255,0.95)",

@@ -47,9 +47,31 @@ class Settings(BaseSettings):
     # variable `ADMIN_SECRET` en Railway con un string largo aleatorio.
     admin_secret: str | None = None
 
+    # Whitelist de correos con permisos de administrador. Formato: cadena
+    # con correos separados por coma — ej:
+    #   "cata@ctglobal.com,director@ctglobal.com"
+    # Ideal para equipos pequeños (1–10 admins). Para agregar/quitar
+    # admins, se edita la env var en Railway y el servicio redeploya.
+    # Si la cadena está vacía, nadie es admin por esta vía (solo el
+    # `ADMIN_SECRET` sigue sirviendo para disparar `/recompute` desde cron).
+    admin_emails: str = ""
+
     @property
     def is_dev(self) -> bool:
         return self.app_env == "development"
+
+    @property
+    def admin_emails_set(self) -> set[str]:
+        """Set normalizado (lowercase + sin espacios) para comparación
+        case-insensitive. Se construye una vez y se cachea implícitamente
+        gracias al lru_cache de `get_settings()`."""
+        if not self.admin_emails:
+            return set()
+        return {
+            e.strip().lower()
+            for e in self.admin_emails.split(",")
+            if e.strip()
+        }
 
 
 @lru_cache

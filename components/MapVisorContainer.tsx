@@ -25,7 +25,10 @@ import * as Location from "expo-location";
 import { useLocalSearchParams, useRouter } from "expo-router";
 
 import { getGroup as getFamilyGroup } from "../src/services/familyGroupsService";
-import type { FamilyGroup, FamilyMember } from "../src/types/v4";
+import { getRefugeByName } from "../src/services/refugesService";
+import type { FamilyGroup, FamilyMember, RefugeDetails } from "../src/types/v4";
+import RefugeDetailsModal from "./RefugeDetailsModal";
+import StreetViewModal from "./StreetViewModal";
 
 import avenidaTorrencialData from "../data/amenaza_avenida_torrencial.json";
 import InundacionData from "../data/amenaza_inundacion.json";
@@ -111,10 +114,13 @@ export default function MapVisorContainer() {
   const [showEmergenciaPicker, setShowEmergenciaPicker] = useState(false);
 
   const [catastroPanelOpen, setCatastroPanelOpen] = useState(false);
-  const [showElementosExpuestos, setShowElementosExpuestos] = useState(true);
+  // Defaults en `false` — al abrir el Visor el mapa arranca limpio,
+  // mostrando solo las calles y el bbox de Santa Rosa. El usuario
+  // activa explícitamente cada capa desde el panel de capas.
+  const [showElementosExpuestos, setShowElementosExpuestos] = useState(false);
   const [showPrediosRiesgo, setShowPrediosRiesgo] = useState(false);
   const [showPendiente, setShowPendiente] = useState(false);
-  const [showPuntosEncuentro, setShowPuntosEncuentro] = useState(true);
+  const [showPuntosEncuentro, setShowPuntosEncuentro] = useState(false);
   const [showInstituciones, setShowInstituciones] = useState(false);
   const [exposicionModalOpen, setExposicionModalOpen] = useState(false);
 
@@ -123,6 +129,17 @@ export default function MapVisorContainer() {
   // sheet pregunta emergencia + origen y dispara la navegación a /map.
   const [lockedDest, setLockedDest] = useState<LockedDestination | null>(null);
   const [evacuaSheetOpen, setEvacuaSheetOpen] = useState(false);
+
+  // Modal de detalle al tocar un pin (punto de encuentro o institución).
+  // Expone dos acciones: "Ir aquí" (abre QuickEvacuateSheet con destino
+  // fijo y calcula ruta) y "Vista 360" (abre StreetViewModal). Antes de
+  // F4 este flujo existía vía RefugeDetailsModal; F4 lo reemplazó con
+  // un callout directo que perdía la opción de Street View — se
+  // reintrodujo como el componente esperado.
+  const [detailRefuge, setDetailRefuge] = useState<RefugeDetails | null>(null);
+  const [detailLockedDest, setDetailLockedDest] = useState<LockedDestination | null>(null);
+  const [detailCoords, setDetailCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [streetViewOpen, setStreetViewOpen] = useState(false);
 
   const anyCatastroLayerActive = useMemo(
     () => showElementosExpuestos || showPrediosRiesgo || showPendiente,
@@ -146,12 +163,15 @@ export default function MapVisorContainer() {
     } catch {}
   };
 
+  // "Limpiar mapa" DESACTIVA todas las capas y re-centra sobre la zona
+  // de estudio. El comportamiento anterior (setters a true) reactivaba
+  // las capas en lugar de apagarlas — bug reportado por el usuario.
   const handleResetMapView = () => {
     mapRef.current?.animateToRegion(INITIAL_REGION, 500);
-    setShowElementosExpuestos(true);
+    setShowElementosExpuestos(false);
     setShowPrediosRiesgo(false);
     setShowPendiente(false);
-    setShowPuntosEncuentro(true);
+    setShowPuntosEncuentro(false);
     setShowInstituciones(false);
     setEmergencyType("ninguna");
     setFamilyGroup(null);
@@ -221,6 +241,31 @@ export default function MapVisorContainer() {
     setEvacuaSheetOpen(true);
   };
 
+  /** Abre el modal de detalle al tocar un pin (punto de encuentro o
+   *  institución). Carga los detalles enriquecidos del refugio desde
+   *  `refugesService` si existen. Para instituciones que no tienen
+   *  ficha detallada se construye un `RefugeDetails` mínimo con solo
+   *  el nombre y `servicios: []` — suficiente para que el modal
+   *  renderice las acciones "Ir aquí" y "Vista 360". */
+  const openMarkerDetail = (
+    name: string,
+    lat: number,
+    lng: number,
+    lockedDest: LockedDestination,
+  ) => {
+    const found = getRefugeByName(name);
+    const refuge: RefugeDetails = found ?? { nombre: name, servicios: [] };
+    setDetailRefuge(refuge);
+    setDetailCoords({ lat, lng });
+    setDetailLockedDest(lockedDest);
+  };
+
+  const closeMarkerDetail = () => {
+    setDetailRefuge(null);
+    setDetailCoords(null);
+    setDetailLockedDest(null);
+  };
+
   const handleEvacuaConfirm = (p: ConfirmPayload) => {
     setEvacuaSheetOpen(false);
     routeCtx.setSelectedDestination(p.shelter ?? null);
@@ -250,13 +295,20 @@ export default function MapVisorContainer() {
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
       <View style={styles.titleBar}>
-        <Text style={styles.titleText}>Visor geográfico</Text>
-        <Text style={styles.subtitleText}>Santa Rosa de Cabal · Río San Eugenio</Text>
+        <View style={styles.titleIconWrap}>
+          <MaterialIcons name="layers" size={22} color="#ffffff" />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.titleText}>Visor geográfico</Text>
+          <Text style={styles.subtitleText}>
+            Santa Rosa de Cabal · Río San Eugenio
+          </Text>
+        </View>
       </View>
 
       {/* Selector de emergencia para previsualización (sin calcular ruta) */}
       <TouchableOpacity
-        style={[styles.emergenciaChip, { top: insets.top + 68 }]}
+        style={[styles.emergenciaChip, { top: insets.top + 110 }]}
         onPress={() => setShowEmergenciaPicker(true)}
       >
         <MaterialIcons name="warning" size={16} color="#0f172a" />
@@ -297,8 +349,8 @@ export default function MapVisorContainer() {
           pendienteGrados={pendienteGradosData as FeatureCollection}
         />
 
-        {/* Puntos de encuentro — pins verdes. Tap → abre el
-            QuickEvacuateSheet con destino fijo para calcular ruta. */}
+        {/* Puntos de encuentro — pins verdes. Tap → abre el modal de
+            detalle con "Ir aquí" + "Vista 360". */}
         {showPuntosEncuentro &&
           puntosEncuentroVisor.map((p) => (
             <Marker
@@ -306,10 +358,17 @@ export default function MapVisorContainer() {
               coordinate={{ latitude: p.lat, longitude: p.lng }}
               pinColor="#059669"
               title={p.nombre}
-              description="Toca para calcular ruta"
-              onCalloutPress={() =>
-                openRouteFromMarker({ name: p.nombre, kind: "shelter", shelter: p })
-              }
+              description="Toca para ver opciones"
+              onPress={(e) => {
+                // Evita que el onPress del MapView (picking manual en Evacua)
+                // se dispare por el tap del marker.
+                e.stopPropagation?.();
+                openMarkerDetail(p.nombre, p.lat, p.lng, {
+                  name: p.nombre,
+                  kind: "shelter",
+                  shelter: p,
+                });
+              }}
             />
           ))}
 
@@ -321,10 +380,15 @@ export default function MapVisorContainer() {
               coordinate={{ latitude: i.lat, longitude: i.lng }}
               pinColor="#b45309"
               title={i.nombre}
-              description="Toca para calcular ruta"
-              onCalloutPress={() =>
-                openRouteFromMarker({ name: i.nombre, kind: "institucion", institucion: i })
-              }
+              description="Toca para ver opciones"
+              onPress={(e) => {
+                e.stopPropagation?.();
+                openMarkerDetail(i.nombre, i.lat, i.lng, {
+                  name: i.nombre,
+                  kind: "institucion",
+                  institucion: i,
+                });
+              }}
             />
           ))}
 
@@ -367,7 +431,7 @@ export default function MapVisorContainer() {
 
       {/* Controles superiores — solo map type picker */}
       <TouchableOpacity
-        style={[styles.mapTypeBtn, { top: insets.top + 68 }]}
+        style={[styles.mapTypeBtn, { top: insets.top + 110 }]}
         onPress={() => setShowMapTypePicker(true)}
         accessibilityLabel="Cambiar tipo de mapa"
       >
@@ -505,8 +569,36 @@ export default function MapVisorContainer() {
         </TouchableWithoutFeedback>
       </Modal>
 
-      {/* Sheet de Evacua (modo locked) — se abre al tocar el callout de
-          un pin en el mapa para calcular ruta directa a ese destino. */}
+      {/* Modal de detalle al tocar un pin. Expone "Ir aquí" (navega
+          vía QuickEvacuateSheet) y "Vista 360" (StreetViewModal). */}
+      <RefugeDetailsModal
+        visible={detailRefuge !== null}
+        refuge={detailRefuge}
+        onClose={closeMarkerDetail}
+        onNavigate={() => {
+          if (detailLockedDest) {
+            closeMarkerDetail();
+            openRouteFromMarker(detailLockedDest);
+          }
+        }}
+        onStreetView={() => setStreetViewOpen(true)}
+      />
+
+      {/* Street View del destino seleccionado. Se monta sobre el
+          detalle; al cerrar, el detalle sigue visible para que el
+          usuario pueda luego tocar "Ir aquí" sin reabrirlo. */}
+      {detailCoords && detailRefuge && (
+        <StreetViewModal
+          visible={streetViewOpen}
+          onClose={() => setStreetViewOpen(false)}
+          latitude={detailCoords.lat}
+          longitude={detailCoords.lng}
+          placeName={detailRefuge.nombre}
+        />
+      )}
+
+      {/* Sheet de Evacua (modo locked) — se abre tras "Ir aquí" del
+          modal de detalle para calcular ruta directa a ese destino. */}
       <QuickEvacuateSheet
         visible={evacuaSheetOpen}
         onClose={() => setEvacuaSheetOpen(false)}
@@ -524,19 +616,45 @@ export default function MapVisorContainer() {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#f1f5f9" },
   map: { flex: 1 },
-  // Altura fija 60 — permite calcular offset seguro para los chips
-  // flotantes (`top: insets.top + 68`), garantizando que nunca solapen.
+  // Header estético con fondo teal. La altura ya no es fija — crece con
+  // el padding para dar aire al título/subtítulo. El offset del chip
+  // flotante (`top: insets.top + 68`) calza bien con este header.
   titleBar: {
-    height: 60,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    justifyContent: "center",
-    backgroundColor: "#ffffff",
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "#e2e8f0",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    paddingHorizontal: 20,
+    paddingTop: 18,
+    paddingBottom: 20,
+    backgroundColor: "#0f766e",
+    borderBottomLeftRadius: 22,
+    borderBottomRightRadius: 22,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
+    elevation: 4,
   },
-  titleText: { fontSize: 18, fontWeight: "700", color: "#0f172a" },
-  subtitleText: { fontSize: 12, color: "#64748b", marginTop: 2 },
+  titleIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: "rgba(255,255,255,0.22)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  titleText: {
+    fontSize: 22,
+    fontWeight: "800",
+    color: "#ffffff",
+    letterSpacing: -0.3,
+  },
+  subtitleText: {
+    fontSize: 12,
+    color: "rgba(255,255,255,0.82)",
+    marginTop: 2,
+    fontWeight: "500",
+  },
   emergenciaChip: {
     position: "absolute",
     left: 16,

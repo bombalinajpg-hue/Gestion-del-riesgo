@@ -14,7 +14,7 @@
 import { MaterialIcons } from "@expo/vector-icons";
 import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
-import { Alert, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import BottomNavBar from "../components/BottomNavBar";
 import { useAuth } from "../context/AuthContext";
@@ -98,10 +98,22 @@ export default function CuentaScreen() {
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
       <View style={styles.titleBar}>
-        <Text style={styles.title}>Mi cuenta</Text>
+        <View style={styles.titleIconWrap}>
+          <MaterialIcons name="person" size={22} color="#ffffff" />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.title}>Mi cuenta</Text>
+          <Text style={styles.titleSubtitle}>
+            Sesión y datos del estudio
+          </Text>
+        </View>
       </View>
 
-      <View style={styles.content}>
+      <ScrollView
+        style={styles.scrollRoot}
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+      >
         {user && (
           <View style={styles.card}>
             <View style={styles.avatar}>
@@ -204,7 +216,7 @@ export default function CuentaScreen() {
           Pasantía de grado · Ingeniería Catastral y Geodesia{"\n"}
           Universidad Distrital Francisco José de Caldas · 2026
         </Text>
-      </View>
+      </ScrollView>
 
       <BottomNavBar active="cuenta" />
     </SafeAreaView>
@@ -233,15 +245,50 @@ function Row({
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#f1f5f9" },
+  // Header estético con fondo teal (acento de la paleta),
+  // ícono en chip translúcido y título + subtítulo con buena jerarquía.
+  // Reemplaza el header blanco plano sin aire que reportó la usuaria.
   titleBar: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    backgroundColor: "#ffffff",
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "#e2e8f0",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    paddingHorizontal: 20,
+    paddingTop: 18,
+    paddingBottom: 20,
+    backgroundColor: "#0f766e",
+    borderBottomLeftRadius: 22,
+    borderBottomRightRadius: 22,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
+    elevation: 4,
   },
-  title: { fontSize: 18, fontWeight: "700", color: "#0f172a" },
-  content: { flex: 1, padding: 16, gap: 16 },
+  titleIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: "rgba(255,255,255,0.22)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  title: {
+    fontSize: 22,
+    fontWeight: "800",
+    color: "#ffffff",
+    letterSpacing: -0.3,
+  },
+  titleSubtitle: {
+    fontSize: 12,
+    color: "rgba(255,255,255,0.82)",
+    marginTop: 2,
+    fontWeight: "500",
+  },
+  scrollRoot: { flex: 1 },
+  // Respeta el BottomNavBar (~64) + safe-area bottom. Sin esto la
+  // última acción ("Cerrar sesión") quedaba tapada y el usuario no
+  // podía interactuar con ella.
+  content: { padding: 16, paddingBottom: 110, gap: 16 },
   card: {
     backgroundColor: "#fff",
     borderRadius: 14,

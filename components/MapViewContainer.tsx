@@ -331,6 +331,50 @@ export default function MapViewContainer() {
     setShouldCenterOnUser(false);
   }, [shouldCenterOnUser, location]);
 
+  // initialRegion centrado en la ZONA DE ESTUDIO DETALLADO del río San
+  // Eugenio (bbox de ElementosExpuestos, que es el ámbito del EDAVR
+  // ALDESARROLLO 2025). El grafo OSM cubre más territorio, pero el
+  // usuario espera ver directamente el área del proyecto al abrir la app.
+  // Bbox calculado offline desde elementos_expuestos.json:
+  //   min: (-75.6291, 4.8713), max: (-75.6251, 4.8789)
+  // Subido en el archivo desde abajo de `fitToCoordinates` porque ahora
+  // también lo consume el useEffect de "forzar cámara en picking" que
+  // está aquí arriba.
+  const initialRegion = useMemo(() => ({
+    latitude: 4.8751,
+    longitude: -75.6271,
+    latitudeDelta: 0.012,
+    longitudeDelta: 0.012,
+  }), []);
+
+  // Google Maps SDK (Android) centra la cámara automáticamente al GPS
+  // cuando `showsUserLocation` está activo y el GPS está fuera del
+  // `initialRegion`. Para el flujo "Elegir en el mapa" eso rompe la
+  // UX: el usuario va a tocar un punto EN Santa Rosa, no en su GPS
+  // (que puede estar en Pereira o donde haya instalado el APK).
+  //
+  // Cuando entramos en modo picking manual SIN ruta calculada, forzamos
+  // la cámara a la zona de estudio. Usamos un ref para disparar sólo
+  // en la transición a picking; si el usuario después mueve la cámara
+  // manualmente (ej. para buscar una calle específica), la dejamos.
+  const hasCenteredForPickingRef = useRef(false);
+  useEffect(() => {
+    const inPickingMode = startMode === "manual" && !evacuando && routeCoords.length === 0;
+    if (!inPickingMode) {
+      hasCenteredForPickingRef.current = false;
+      return;
+    }
+    if (hasCenteredForPickingRef.current) return;
+    // Delay breve para dejar que MapView termine su primer render antes
+    // de que el SDK nativo intente saltar al GPS; sin esto, nuestro
+    // animateToRegion puede ejecutarse antes y luego el SDK lo pisa.
+    const t = setTimeout(() => {
+      mapRef.current?.animateToRegion(initialRegion, 400);
+      hasCenteredForPickingRef.current = true;
+    }, 400);
+    return () => clearTimeout(t);
+  }, [startMode, evacuando, routeCoords.length, initialRegion]);
+
   // Cambio de startMode: reset de puntoConfirmado y del startPoint si
   // vuelve a "gps". El limpiado de coords/rutaSugerida lo hace el hook.
   useEffect(() => {
@@ -674,19 +718,6 @@ export default function MapViewContainer() {
     }, 200);
     return () => clearTimeout(t);
   }, [routeCoords]);
-
-  // initialRegion centrado en la ZONA DE ESTUDIO DETALLADO del río San
-  // Eugenio (bbox de ElementosExpuestos, que es el ámbito del EDAVR
-  // ALDESARROLLO 2025). El grafo OSM cubre más territorio, pero el
-  // usuario espera ver directamente el área del proyecto al abrir la app.
-  // Bbox calculado offline desde elementos_expuestos.json:
-  //   min: (-75.6291, 4.8713), max: (-75.6251, 4.8789)
-  const initialRegion = useMemo(() => ({
-    latitude: 4.8751,
-    longitude: -75.6271,
-    latitudeDelta: 0.012,
-    longitudeDelta: 0.012,
-  }), []);
 
   // Memoizado para no llamar `getGraph()` en cada render dentro del JSX.
   // El grafo es singleton y no cambia tras `graphReady`, así que la
