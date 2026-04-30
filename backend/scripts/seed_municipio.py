@@ -67,7 +67,11 @@ from app.models import (  # noqa: E402
 )
 
 
-WGS84 = "EPSG:4326"
+# Datum canónico del proyecto: MAGNA-SIRGAS, oficial en Colombia
+# (Resolución IGAC 471/2020). En coordenadas geográficas su EPSG es 4686.
+# Numéricamente difiere ~10 cm de WGS84 (4326) — lo suficientemente cerca
+# como para enviar lat/lng al cliente "tal cual" sin reproyección.
+MAGNA_SIRGAS = "EPSG:4686"
 
 
 @dataclass
@@ -93,7 +97,7 @@ def parse_hazard(spec: str) -> HazardSpec:
     return HazardSpec(emergency_type=emergency_type, path=Path(path_str))
 
 
-def geometry_to_ewkt(geom: BaseGeometry, srid: int = 4326) -> str:
+def geometry_to_ewkt(geom: BaseGeometry, srid: int = 4686) -> str:
     """Shapely geom → EWKT que PostGIS entiende directo en INSERT."""
     return f"SRID={srid};{geom.wkt}"
 
@@ -113,11 +117,11 @@ def _load_plain_json_array(path: Path) -> gpd.GeoDataFrame | None:
         return None
     geometries = [Point(r["lng"], r["lat"]) for r in raw]
     attrs = [{k: v for k, v in r.items() if k not in ("lat", "lng")} for r in raw]
-    return gpd.GeoDataFrame(attrs, geometry=geometries, crs=WGS84)
+    return gpd.GeoDataFrame(attrs, geometry=geometries, crs=MAGNA_SIRGAS)
 
 
 def load_to_wgs84(path: Path) -> gpd.GeoDataFrame:
-    """Carga un archivo geográfico y lo reproyecta a WGS84 si hace falta.
+    """Carga un archivo geográfico y lo reproyecta a MAGNA-SIRGAS si hace falta.
 
     Soporta:
       · Cualquier formato que GeoPandas lea (shapefile, geojson, gpkg, kml).
@@ -131,10 +135,10 @@ def load_to_wgs84(path: Path) -> gpd.GeoDataFrame:
         return plain
     gdf = gpd.read_file(path)
     if gdf.crs is None:
-        print(f"⚠️  {path}: sin CRS declarado, asumo WGS84")
-    elif str(gdf.crs) != WGS84:
-        print(f"↪ Reproyectando {path} de {gdf.crs} a {WGS84}")
-        gdf = gdf.to_crs(WGS84)
+        print(f"⚠️  {path}: sin CRS declarado, asumo MAGNA-SIRGAS")
+    elif str(gdf.crs) != MAGNA_SIRGAS:
+        print(f"↪ Reproyectando {path} de {gdf.crs} a {MAGNA_SIRGAS}")
+        gdf = gdf.to_crs(MAGNA_SIRGAS)
     return gdf
 
 
@@ -292,7 +296,7 @@ async def main(args: argparse.Namespace) -> None:
     if specs:
         frames = [load_to_wgs84(s.path) for s in specs]
         bbox_gdf = gpd.GeoDataFrame(
-            gpd.pd.concat(frames, ignore_index=True), crs=WGS84
+            gpd.pd.concat(frames, ignore_index=True), crs=MAGNA_SIRGAS
         )
 
     async with SessionLocal() as db:

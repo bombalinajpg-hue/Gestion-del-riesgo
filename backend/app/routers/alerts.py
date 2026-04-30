@@ -84,7 +84,7 @@ async def alerts_near(
     """Alertas dentro de un radio del punto dado — útil para la vista
     "alertas cerca de mí" en Home (cuando hay fix de GPS). El Visor usa
     el endpoint sin filtro espacial (arriba)."""
-    query_point = ST_SetSRID(ST_MakePoint(lng, lat), 4326)
+    query_point = ST_SetSRID(ST_MakePoint(lng, lat), 4686)
     q = (
         select(PublicAlert, ST_AsGeoJSON(PublicAlert.centroid).label("geojson"))
         .where(

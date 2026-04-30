@@ -12,10 +12,14 @@ Decisiones de esquema:
    permiten que los clientes generen IDs offline si algún día hace
    falta (sync optimista).
 
-3. **Geometrías en SRID 4326 (WGS84 lat/lng)**: mismo SRID que usa el
-   resto del app y react-native-maps. Todas las queries de distancia
-   las hacemos con `ST_DWithin(geography, geography, meters)` —
-   castear a geography da distancias en metros nativamente.
+3. **Geometrías en SRID 4686 (MAGNA-SIRGAS, datum oficial Colombia
+   por Resolución IGAC 471/2020)**: el almacenamiento canónico está en
+   datum oficial. WGS84 (lo que envía/espera react-native-maps) y
+   MAGNA-SIRGAS difieren ~10 cm — invisible al usuario, así que el
+   wire transmite lat/lng "tal cual" sin reproyección. Para mediciones
+   métricas de distancia/área/buffer usamos `::geography` con
+   `ST_DWithin` o reproyectamos a `ST_Transform(geom, 9377)` (CTM12,
+   sistema proyectado oficial nacional, unidades en metros).
 
 4. **Timestamps en UTC con zona**: `TIMESTAMPTZ` evita el clásico
    lío de "¿qué hora es esta?". El cliente formatea en la TZ local.
@@ -140,7 +144,7 @@ class Municipio(Base):
     slug: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     # Bbox opcional — util para centrar el mapa al elegir municipio.
-    bbox = mapped_column(Geometry("POLYGON", srid=4326), nullable=True)
+    bbox = mapped_column(Geometry("POLYGON", srid=4686), nullable=True)
     active: Mapped[bool] = mapped_column(default=True, server_default="true")
     created_at: Mapped[datetime] = _ts_created()
 
@@ -204,7 +208,7 @@ class CitizenReport(Base):
     )
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     photo_url: Mapped[str | None] = mapped_column(Text, nullable=True)
-    location = mapped_column(Geometry("POINT", srid=4326), nullable=False)
+    location = mapped_column(Geometry("POINT", srid=4686), nullable=False)
 
     created_at: Mapped[datetime] = _ts_created()
     expired_at: Mapped[datetime | None] = mapped_column(
@@ -232,7 +236,7 @@ class PublicAlert(Base):
     type: Mapped[ReportType] = mapped_column(
         SAEnum(ReportType, name="report_type"), nullable=False
     )
-    centroid = mapped_column(Geometry("POINT", srid=4326), nullable=False)
+    centroid = mapped_column(Geometry("POINT", srid=4686), nullable=False)
     radius_m: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
 
     aggregated_severity: Mapped[Severity | None] = mapped_column(
@@ -265,7 +269,7 @@ class MissingPerson(Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     photo_url: Mapped[str | None] = mapped_column(Text, nullable=True)
-    last_seen = mapped_column(Geometry("POINT", srid=4326), nullable=False)
+    last_seen = mapped_column(Geometry("POINT", srid=4686), nullable=False)
     last_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
@@ -311,7 +315,7 @@ class GroupMember(Base):
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
     )
     display_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
-    last_location = mapped_column(Geometry("POINT", srid=4326), nullable=True)
+    last_location = mapped_column(Geometry("POINT", srid=4686), nullable=True)
     last_status: Mapped[MemberStatus] = mapped_column(
         SAEnum(MemberStatus, name="member_status"),
         default=MemberStatus.unknown,
@@ -334,7 +338,7 @@ class Shelter(Base):
     )
     external_ref: Mapped[str | None] = mapped_column(String(64), nullable=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
-    location = mapped_column(Geometry("POINT", srid=4326), nullable=False)
+    location = mapped_column(Geometry("POINT", srid=4686), nullable=False)
     capacity: Mapped[int | None] = mapped_column(Integer, nullable=True)
     amenities: Mapped[dict] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
@@ -355,7 +359,7 @@ class Institution(Base):
     type: Mapped[InstitutionType] = mapped_column(
         SAEnum(InstitutionType, name="institution_type"), nullable=False
     )
-    location = mapped_column(Geometry("POINT", srid=4326), nullable=False)
+    location = mapped_column(Geometry("POINT", srid=4686), nullable=False)
     phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
     address: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -382,7 +386,7 @@ class HazardPolygon(Base):
     )
     # MultiPolygon soporta geometrías complejas (islas, agujeros).
     geom = mapped_column(
-        Geometry("MULTIPOLYGON", srid=4326, spatial_index=True), nullable=False
+        Geometry("MULTIPOLYGON", srid=4686, spatial_index=True), nullable=False
     )
     # Metadata opcional para auditoría: de dónde salió el dato.
     source: Mapped[str | None] = mapped_column(String(200), nullable=True)

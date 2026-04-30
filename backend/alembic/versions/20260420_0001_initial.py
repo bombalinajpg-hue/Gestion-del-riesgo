@@ -64,7 +64,7 @@ def upgrade() -> None:
         sa.Column("name", sa.String(200), nullable=False),
         sa.Column(
             "bbox",
-            geoalchemy2.Geometry(geometry_type="POLYGON", srid=4326),
+            geoalchemy2.Geometry(geometry_type="POLYGON", srid=4686),
             nullable=True,
         ),
         sa.Column("active", sa.Boolean, nullable=False, server_default="true"),
@@ -118,7 +118,7 @@ def upgrade() -> None:
         sa.Column("photo_url", sa.Text, nullable=True),
         sa.Column(
             "location",
-            geoalchemy2.Geometry(geometry_type="POINT", srid=4326),
+            geoalchemy2.Geometry(geometry_type="POINT", srid=4686),
             nullable=False,
         ),
         sa.Column(
@@ -144,7 +144,7 @@ def upgrade() -> None:
         sa.Column("type", REPORT_TYPE, nullable=False),
         sa.Column(
             "centroid",
-            geoalchemy2.Geometry(geometry_type="POINT", srid=4326),
+            geoalchemy2.Geometry(geometry_type="POINT", srid=4686),
             nullable=False,
         ),
         sa.Column("radius_m", sa.Integer, nullable=False, server_default="30"),
@@ -181,7 +181,7 @@ def upgrade() -> None:
         sa.Column("photo_url", sa.Text, nullable=True),
         sa.Column(
             "last_seen",
-            geoalchemy2.Geometry(geometry_type="POINT", srid=4326),
+            geoalchemy2.Geometry(geometry_type="POINT", srid=4686),
             nullable=False,
         ),
         sa.Column("last_seen_at", sa.DateTime(timezone=True), nullable=False),
@@ -238,7 +238,7 @@ def upgrade() -> None:
         sa.Column("display_name", sa.String(200), nullable=True),
         sa.Column(
             "last_location",
-            geoalchemy2.Geometry(geometry_type="POINT", srid=4326),
+            geoalchemy2.Geometry(geometry_type="POINT", srid=4686),
             nullable=True,
         ),
         sa.Column(
@@ -266,7 +266,7 @@ def upgrade() -> None:
         sa.Column("name", sa.String(200), nullable=False),
         sa.Column(
             "location",
-            geoalchemy2.Geometry(geometry_type="POINT", srid=4326),
+            geoalchemy2.Geometry(geometry_type="POINT", srid=4686),
             nullable=False,
         ),
         sa.Column("capacity", sa.Integer, nullable=True),
@@ -298,7 +298,7 @@ def upgrade() -> None:
         sa.Column("type", INSTITUTION_TYPE, nullable=False),
         sa.Column(
             "location",
-            geoalchemy2.Geometry(geometry_type="POINT", srid=4326),
+            geoalchemy2.Geometry(geometry_type="POINT", srid=4686),
             nullable=False,
         ),
         sa.Column("phone", sa.String(32), nullable=True),
@@ -321,7 +321,7 @@ def upgrade() -> None:
         sa.Column("categoria", HAZARD_CATEGORY, nullable=False),
         sa.Column(
             "geom",
-            geoalchemy2.Geometry(geometry_type="MULTIPOLYGON", srid=4326),
+            geoalchemy2.Geometry(geometry_type="MULTIPOLYGON", srid=4686),
             nullable=False,
         ),
         sa.Column("source", sa.String(200), nullable=True),

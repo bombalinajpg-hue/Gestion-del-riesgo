@@ -63,7 +63,7 @@ def _gen_code() -> str:
 
 
 def _point_wkt(lat: float, lng: float) -> str:
-    return f"SRID=4326;POINT({lng} {lat})"
+    return f"SRID=4686;POINT({lng} {lat})"
 
 
 async def _get_group_by_code(db: AsyncSession, code: str) -> FamilyGroup:
@@ -319,7 +319,7 @@ async def update_my_membership(
                 Municipio.bbox,
                 ST_Contains(
                     Municipio.bbox,
-                    ST_SetSRID(ST_MakePoint(payload.location.lng, payload.location.lat), 4326),
+                    ST_SetSRID(ST_MakePoint(payload.location.lng, payload.location.lat), 4686),
                 ).label("inside"),
             ).where(Municipio.id == group.municipio_id)
         )

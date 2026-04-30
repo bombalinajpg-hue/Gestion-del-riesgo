@@ -49,11 +49,12 @@ async def recluster_municipio(
         delete(PublicAlert).where(PublicAlert.municipio_id == municipio_id)
     )
 
-    # `ST_ClusterDBSCAN` opera en las unidades del SRID. Para 4326 eso
-    # es grados; convertimos `radius_m` a grados asumiendo ~111 km por
-    # grado. A la latitud de Colombia (~4-5°N) la distorsión lng vs lat
-    # es <1 % — despreciable para un radio de 30 m.
-    radius_deg = radius_m / 111_000.0
+    # `ST_ClusterDBSCAN` opera en las unidades del SRID de la geometría
+    # que recibe. Reproyectamos `location` a EPSG:9377 (MAGNA-SIRGAS /
+    # Colombia CTM12 — sistema proyectado oficial nacional, unidades en
+    # metros) y pasamos `radius_m` directo como eps. Esto evita la
+    # aproximación "1° ≈ 111 km" y queda métricamente correcto en toda
+    # Colombia, no solo cerca del ecuador.
     cutoff = datetime.now(timezone.utc) - timedelta(hours=window_hours)
 
     # Un solo SQL hace:
@@ -75,8 +76,8 @@ async def recluster_municipio(
             SELECT
                 *,
                 ST_ClusterDBSCAN(
-                    location::geometry,
-                    eps := :radius_deg,
+                    ST_Transform(location::geometry, 9377),
+                    eps := :radius_m,
                     minpoints := 1
                 ) OVER (PARTITION BY type) AS cid
             FROM recent
@@ -127,7 +128,6 @@ async def recluster_municipio(
         {
             "municipio_id": municipio_id,
             "cutoff": cutoff,
-            "radius_deg": radius_deg,
             "radius_m": radius_m,
             "min_devices": min_unique_devices,
         },

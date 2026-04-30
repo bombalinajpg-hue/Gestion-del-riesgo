@@ -45,7 +45,7 @@ async def _recluster_bg(municipio_id: UUID) -> None:
 
 def _point_wkt(lat: float, lng: float) -> str:
     """WKT de un punto en WGS84. Para insertar en columnas geometry."""
-    return f"SRID=4326;POINT({lng} {lat})"
+    return f"SRID=4686;POINT({lng} {lat})"
 
 
 @router.post("", response_model=ReportOut, status_code=201)
@@ -111,7 +111,7 @@ async def reports_near(
     geography hace que el radio esté en metros reales en vez de grados
     (que varían con la latitud).
     """
-    query_point = ST_SetSRID(ST_MakePoint(lng, lat), 4326)
+    query_point = ST_SetSRID(ST_MakePoint(lng, lat), 4686)
     q = (
         select(CitizenReport, ST_AsGeoJSON(CitizenReport.location).label("geojson"))
         .where(
