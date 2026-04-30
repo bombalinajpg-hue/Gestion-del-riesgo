@@ -1,19 +1,27 @@
 /**
  * scripts/build-graph.js
  *
- * Construye el grafo vial de Santa Rosa de Cabal descargando los datos
- * de OpenStreetMap vía Overpass API, lo enriquece con las categorías de
- * amenaza de tus GeoJSON, y genera `data/graph.json` listo para bundling.
+ * Paso 1 del pipeline del grafo: descarga la red vial de Santa Rosa de
+ * Cabal desde OpenStreetMap vía Overpass API y arma la topología
+ * (nodos, aristas, costos nominales por perfil). NO toca capas de
+ * amenaza ni catastrales — eso lo hace `backend/scripts/enrich_graph.py`,
+ * que opera con shapely en EPSG:9377 (CTM12) para joins espaciales
+ * geométricamente correctos.
+ *
+ * Pipeline completo:
+ *   1) node scripts/build-graph.js              ← este archivo
+ *   2) python backend/scripts/enrich_graph.py   ← hazards + catastro
  *
  * Uso:
- *   node scripts/build-graph.js
+ *   node scripts/build-graph.js   (o `npm run build-graph`)
  *
  * Salida:
- *   data/graph.json         — grafo listo para cargar en la app
- *   data/graph.meta.json    — conteos y estadísticas (para el informe)
+ *   data/graph.json         — grafo base (sin enriquecer)
+ *   data/graph.meta.json    — conteos y metadata
  *
- * Este script corre UNA SOLA VEZ (o cuando cambie la red vial de OSM).
- * El resultado se commitea al repo y se incluye en el APK.
+ * Este script corre cuando cambia la red vial de OSM. Después de
+ * correrlo hay que correr enrich_graph.py para reaplicar Tobler,
+ * obras lineales, predios en riesgo y hazards.
  *
  * Dependencias: ninguna externa — usa solo fetch nativo de Node 18+.
  */
@@ -125,48 +133,6 @@ function haversineMeters(a, b) {
   return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
 }
 
-function pointInPolygon(point, ring) {
-  const x = point.lng;
-  const y = point.lat;
-  let inside = false;
-  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-    const xi = ring[i][0];
-    const yi = ring[i][1];
-    const xj = ring[j][0];
-    const yj = ring[j][1];
-    const hit = yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi;
-    if (hit) inside = !inside;
-  }
-  return inside;
-}
-
-function pointInFeatureCollection(point, fc) {
-  // Devuelve la categoría encontrada (si la feature trae `Categoria`) o null
-  for (const f of fc.features) {
-    if (!f.geometry) continue;
-    const cat = f.properties?.Categoria ?? f.properties?.categoria ?? null;
-    if (f.geometry.type === 'Polygon') {
-      if (pointInPolygon(point, f.geometry.coordinates[0])) return cat;
-    } else if (f.geometry.type === 'MultiPolygon') {
-      for (const poly of f.geometry.coordinates) {
-        if (pointInPolygon(point, poly[0])) return cat;
-      }
-    }
-  }
-  return null;
-}
-
-function categoryRank(c) {
-  if (c === 'Alta') return 3;
-  if (c === 'Media') return 2;
-  if (c === 'Baja') return 1;
-  return 0;
-}
-
-function maxCategory(a, b) {
-  return categoryRank(a) >= categoryRank(b) ? a : b;
-}
-
 function getSpeed(profile, highway) {
   const table = SPEEDS[profile];
   return table[highway] ?? table.default;
@@ -176,9 +142,17 @@ function getSpeed(profile, highway) {
 
 async function main() {
   console.log(`[build-graph] Descargando datos OSM de ${AREA.name}...`);
+  // User-Agent explícito: Overpass cierra conexiones (406/429) cuando
+  // detecta clientes "anónimos" sin UA propio — Node 24 no lo añade
+  // por defecto al fetch nativo. Mandamos un identificador claro
+  // siguiendo la guía de la wiki de OSM.
   const response = await fetch('https://overpass-api.de/api/interpreter', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'User-Agent': 'EvacuApp/1.0 (https://github.com/Bombalina-hue/rutas; contacto: direccion@ctglobal.com.co)',
+      'Accept': 'application/json',
+    },
     body: `data=${encodeURIComponent(OVERPASS_QUERY)}`,
   });
   if (!response.ok) {
@@ -224,16 +198,12 @@ async function main() {
         { lat: fromNode.lat, lon: fromNode.lon },
         { lat: toNode.lat, lon: toNode.lon }
       );
-      // Mid-point para etiquetar amenaza
-      const midLat = (fromNode.lat + toNode.lat) / 2;
-      const midLon = (fromNode.lon + toNode.lon) / 2;
 
       const baseEdge = {
         from: fromId,
         to: toId,
         lengthMeters: length,
         highway,
-        mid: { lat: midLat, lng: midLon },
         noCar,
       };
       edgesRaw.push(baseEdge);
@@ -242,40 +212,6 @@ async function main() {
       }
     }
   }
-
-  // ─── Enriquecer con amenaza ─────────────────────────────────────────────
-  console.log('[build-graph] Cargando capas de amenaza...');
-  const dataDir = path.join(__dirname, '..', 'data');
-
-  const readFC = (file) => {
-    const p = path.join(dataDir, file);
-    if (!fs.existsSync(p)) {
-      console.warn(`[build-graph]   WARN: ${file} no existe — se omitirá`);
-      return { features: [] };
-    }
-    return JSON.parse(fs.readFileSync(p, 'utf-8'));
-  };
-
-  const inund = readFC('amenaza_inundacion.json');
-  const mm = readFC('amenaza_movimiento_en_masa.json');
-  const at = readFC('amenaza_avenida_torrencial.json');
-
-  console.log('[build-graph] Etiquetando aristas con categoría de amenaza...');
-  let tagged = 0;
-  for (const edge of edgesRaw) {
-    const hazard = {};
-    const cInund = pointInFeatureCollection(edge.mid, inund);
-    const cMM = pointInFeatureCollection(edge.mid, mm);
-    const cAT = pointInFeatureCollection(edge.mid, at);
-    if (cInund) hazard.inundacion = cInund;
-    if (cMM) hazard.movimiento_en_masa = cMM;
-    if (cAT) hazard.avenida_torrencial = cAT;
-    if (Object.keys(hazard).length > 0) {
-      edge.hazardByType = hazard;
-      tagged++;
-    }
-  }
-  console.log(`[build-graph]   ${tagged} aristas etiquetadas con al menos una amenaza`);
 
   // ─── Formato final ──────────────────────────────────────────────────────
   const nodes = [];
@@ -306,7 +242,6 @@ async function main() {
           'cycling-regular': +(lengthMeters / getSpeed('cycling-regular', e.highway)).toFixed(2),
           'driving-car': carSpeed === 0 ? Infinity : +(lengthMeters / carSpeed).toFixed(2),
         },
-        ...(e.hazardByType ? { hazardByType: e.hazardByType } : {}),
       };
     })
     // Si un perfil tiene Infinity, serializamos a null y lo reconvertimos
@@ -347,11 +282,21 @@ async function main() {
     },
   };
 
+  const dataDir = path.join(__dirname, '..', 'data');
   const outPath = path.join(dataDir, 'graph.json');
-  fs.writeFileSync(outPath, JSON.stringify(graph));
+  const flatBackupPath = path.join(dataDir, 'graph.flat.backup.json');
+  const serialized = JSON.stringify(graph);
+  fs.writeFileSync(outPath, serialized);
+  // El backup "flat" se reescribe SIEMPRE al final de build-graph para
+  // que represente el estado pre-enriquecimiento más reciente. Sin
+  // esto, enrich_graph.py podría conservar un backup viejo de OSMs
+  // anteriores y la idempotencia se rompe en sutiles formas.
+  fs.writeFileSync(flatBackupPath, serialized);
   const sizeKb = (fs.statSync(outPath).size / 1024).toFixed(1);
   console.log(`[build-graph] ✓ Grafo guardado en ${outPath} (${sizeKb} KB)`);
+  console.log(`[build-graph] ✓ Backup flat → ${flatBackupPath}`);
   console.log(`[build-graph]   nodos: ${nodes.length}, aristas: ${edges.length}`);
+  console.log(`[build-graph]   (sin enriquecer — corre ahora "npm run enrich-graph")`);
 
   const metaPath = path.join(dataDir, 'graph.meta.json');
   fs.writeFileSync(
@@ -360,7 +305,6 @@ async function main() {
       {
         ...graph.meta,
         sizeKb: +sizeKb,
-        taggedEdges: tagged,
         bbox: graph.bbox,
       },
       null,

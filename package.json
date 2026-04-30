@@ -9,7 +9,9 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "build-graph": "node scripts/build-graph.js"
+    "build-graph": "node scripts/build-graph.js",
+    "enrich-graph": "uv run backend/scripts/enrich_graph.py",
+    "rebuild-graph": "npm run build-graph && npm run enrich-graph"
   },
   "dependencies": {
     "@expo/ngrok": "^4.1.0",
