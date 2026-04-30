@@ -1,5 +1,5 @@
 {
-  "generadoEn": "2026-04-23T00:16:51.066Z",
+  "generadoEn": "2026-04-30T22:48:44.675Z",
   "N": 50,
   "emergencias": [
     "inundacion",
@@ -19,7 +19,7 @@
       "catas": {
         "rutas": 49,
         "fails": 1,
-        "duracionMediaMin": 43.52,
+        "duracionMediaMin": 43.6,
         "distanciaMediaM": 2756,
         "pctRutasCruzandoElementosAlta": 0,
         "pctRutasCruzandoObraAlta": 12.2
@@ -37,7 +37,7 @@
       "catas": {
         "rutas": 47,
         "fails": 3,
-        "duracionMediaMin": 50.65,
+        "duracionMediaMin": 50.76,
         "distanciaMediaM": 3228,
         "pctRutasCruzandoElementosAlta": 8.5,
         "pctRutasCruzandoObraAlta": 8.5
@@ -55,10 +55,10 @@
       "catas": {
         "rutas": 49,
         "fails": 1,
-        "duracionMediaMin": 44.63,
-        "distanciaMediaM": 2845,
+        "duracionMediaMin": 44.72,
+        "distanciaMediaM": 2854,
         "pctRutasCruzandoElementosAlta": 0,
-        "pctRutasCruzandoObraAlta": 10.2
+        "pctRutasCruzandoObraAlta": 8.2
       }
     }
   }

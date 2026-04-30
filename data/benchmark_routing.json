@@ -6,29 +6,29 @@
     "source": "overpass"
   },
   "benchmark": {
-    "iterations": 200,
+    "iterations": 100,
     "profile": "foot-walking",
     "algorithm": "dijkstra",
-    "totalElapsedSec": 0.086
+    "totalElapsedSec": 0.144
   },
   "success": {
-    "rate": 0.96,
-    "total": 200,
-    "successful": 192,
-    "failed": 8
+    "rate": 0.97,
+    "total": 100,
+    "successful": 97,
+    "failed": 3
   },
   "latencyMs": {
-    "mean": 0.427,
-    "p50": 0.342,
-    "p90": 0.693,
-    "p95": 0.789,
-    "p99": 2.458,
-    "min": 0.02,
-    "max": 6.654
+    "mean": 1.436,
+    "p50": 1.113,
+    "p90": 2.47,
+    "p95": 3.743,
+    "p99": 13.12,
+    "min": 0.076,
+    "max": 13.12
   },
   "routeDurationSec": {
-    "meanMinutes": 35.66,
-    "p50Minutes": 31.17,
-    "p95Minutes": 80.56
+    "meanMinutes": 44.3,
+    "p50Minutes": 39.2,
+    "p95Minutes": 106.59
   }
 }
