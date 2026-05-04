@@ -29,7 +29,7 @@ Documento técnico para el capítulo de "Arquitectura del sistema" del documento
 │                 │                             │                    │
 │   ┌─────────────▼─────┐     ┌─────────────────▼─────┐            │
 │   │  Datos Offline    │     │  Servicios API        │            │
-│   │  graph.json 3.7MB │     │  (axios + Firebase    │            │
+│   │  graph.json 3.3MB │     │  (axios + Firebase    │            │
 │   │  amenazas GeoJSON │     │   ID token)           │            │
 │   │  catastro 12MB    │     └─────────┬─────────────┘            │
 │   └───────────────────┘               │                          │
@@ -139,15 +139,12 @@ Transiciones: **fade** para tabs (index/visor/cuenta/login/onboarding), **slide_
 
 | Archivo | Tamaño | Contenido |
 |---|---|---|
-| `data/graph.json` | 3.7 MB | 6.538 nodos + 13.363 aristas de OSM Santa Rosa, enriquecidas con hazards, pendiente Tobler, vulnerabilidad obras lineales y predios en riesgo cercanos |
+| `data/graph.json` | 3.3 MB | 6.500 nodos + 13.300 aristas de OSM Santa Rosa |
 | `data/amenaza_inundacion.json` | 932 KB | Polígonos de inundación con categoría |
 | `data/amenaza_movimiento_en_masa.json` | 515 KB | Polígonos de movimiento en masa |
 | `data/amenaza_avenida_torrencial.json` | 79 KB | Polígonos de avenida torrencial |
 | `data/catastro/` | ~12 MB | 12 capas: predios, vulnerabilidad (edificios/obras/personas), riesgo por fenómeno, elementos expuestos, pendiente, exposición |
 | `data/destinos.json`, `instituciones.json` | pequeños | Puntos de encuentro + hospitales/policía/bomberos |
-
-`graph.json` no se edita a mano — se construye por el pipeline de dos
-etapas descrito en §2.5 (`scripts/build-graph.js` + `backend/scripts/enrich_graph.py`).
 
 ---
 
@@ -215,23 +212,12 @@ backend/
 
 ### Modelo de datos
 
-**Política de sistemas de referencia espacial** (post-endurecimiento SIG, 2026-04-30):
-
-- **Storage canónico = EPSG:4686 (MAGNA-SIRGAS)** en todas las columnas
-  `Geometry`. Cumple Resolución IGAC 471/2020 (datum oficial Colombia).
-- **Wire al cliente RN = lat/lng numérico "tal cual"**. La diferencia
-  4686 ↔ 4686 (WGS84) es ~10 cm — invisible al usuario, así no se
-  reproyecta en cada `ST_AsGeoJSON`. El cliente es 4686 implícito.
-- **Operaciones métricas = EPSG:9377 (CTM12)** vía `ST_Transform(geom, 9377)`
-  cuando se necesitan distancias o áreas exactas en metros. Para queries
-  de proximidad simples se sigue usando `::geography` con `ST_DWithin`.
-
 ```
 municipios
 ├── id (UUID PK)
 ├── slug (unique)
 ├── name
-├── bbox (Geometry POLYGON 4686) -- usado para geo-fence
+├── bbox (Geometry POLYGON 4326) -- usado para geo-fence
 ├── active
 └── created_at
 
@@ -250,7 +236,7 @@ citizen_reports
 ├── type (enum: bloqueo_vial, sendero_obstruido, inundacion_local, deslizamiento_local, riesgo_electrico, refugio_saturado, refugio_cerrado, otro)
 ├── severity (enum: leve, moderada, grave)
 ├── note
-├── location (Geometry POINT 4686)
+├── location (Geometry POINT 4326)
 ├── photo_url (opcional)
 ├── created_at
 └── expired_at (soft delete)
@@ -259,7 +245,7 @@ public_alerts
 ├── id (UUID PK)
 ├── municipio_id (FK)
 ├── type
-├── centroid (Geometry POINT 4686)
+├── centroid (Geometry POINT 4326)
 ├── radius_m
 ├── aggregated_severity
 ├── support_count
@@ -280,8 +266,8 @@ group_members
 ├── group_id (FK)
 ├── user_id (FK)
 ├── display_name
-├── last_location (Geometry POINT 4686)
-├── last_status (enum: safe, evacuating, help, unknown)
+├── last_location (Geometry POINT 4326)
+├── last_status (enum: safe, evacuating, need_help, unknown)
 ├── last_seen_at
 └── joined_at
 
@@ -290,7 +276,7 @@ missing_persons
 ├── municipio_id (FK)
 ├── reported_by_user_id (FK)
 ├── name, description, photo_url
-├── last_seen_location (Geometry POINT 4686)
+├── last_seen_location (Geometry POINT 4326)
 ├── contact
 ├── status (desaparecida / encontrada)
 └── created_at
@@ -306,11 +292,6 @@ missing_persons
 - **Firebase service account** como env var en Railway (no en disco, no en git).
 - **CORS** configurable por env var (default `"*"` para dev).
 - **Soft-delete** en reportes (`expired_at`) para audit trail.
-- **Cumplimiento normativo geodésico**: storage canónico en EPSG:4686
-  (MAGNA-SIRGAS, Resolución IGAC 471/2020). Mediciones métricas en
-  EPSG:9377 (CTM12, sistema proyectado oficial nacional, unidades en
-  metros) o vía `::geography` para `ST_DWithin`. Sin aproximaciones
-  planas en grados.
 
 ### Deploy
 
@@ -325,112 +306,7 @@ Minimal: `logging.basicConfig` + 9 log calls a nivel INFO/WARNING en los routers
 
 ---
 
-## 3. Pipeline del grafo vial (offline)
-
-`data/graph.json` se construye por un pipeline de **dos etapas** —
-una en Node y otra en Python. Esta separación es deliberada: cada
-herramienta hace lo que mejor sabe.
-
-```
-node scripts/build-graph.js              ← Etapa 1 — topología
-        ↓
-data/graph.json (flat) + data/graph.flat.backup.json
-        ↓
-uv run backend/scripts/enrich_graph.py   ← Etapa 2 — joins espaciales
-        ↓
-data/graph.json (enriched)
-```
-
-Atajo: `npm run rebuild-graph` corre las dos en orden.
-
-### Etapa 1 — `scripts/build-graph.js`
-
-Descarga la red vial de Santa Rosa de Cabal desde **OpenStreetMap vía
-Overpass API** (con User-Agent explícito; Node 24 sin UA recibe 406)
-y arma la topología base:
-
-- **Nodos:** un nodo del grafo por cada nodo OSM en alguna way útil
-  (intersección o vértice intermedio de la geometría).
-- **Aristas:** un par dirigido por cada segmento; doble si la way no
-  es `oneway`.
-- **Costos nominales por perfil** (`foot-walking` / `cycling-regular`
-  / `driving-car`) calculados como `lengthMeters / SPEED[highway]`,
-  con velocidades calibradas para Santa Rosa: vías residenciales
-  29 km/h vs los 50 km/h del límite legal — la cordillera Central
-  impone pendientes ~8 % y firme irregular.
-- También gestiona `data/graph.flat.backup.json`: lo reescribe siempre
-  al terminar para evitar que un backup de un OSM anterior contamine
-  la siguiente etapa.
-
-NO toca capas de amenaza ni catastrales.
-
-### Etapa 2 — `backend/scripts/enrich_graph.py`
-
-Hace todos los joins espaciales con **shapely 2.x + STRtree + pyproj**,
-operando en **EPSG:9377** (CTM12 / MAGNA-SIRGAS proyectado, oficial
-Colombia, unidades en metros). Reproyección de las geometrías de cada
-capa a 9377 una sola vez al cargar; los joins por arista usan el
-árbol espacial para `O(log n)` en cada capa — necesario porque
-13 363 aristas × 8 capas con hasta 270 polígonos serían ~28 M
-comparaciones sin índice.
-
-| Factor | Método |
-|---|---|
-| **Hazards** (3 emergencias × 3 categorías) | Line-polygon intersection. Si la arista cruza polígonos de distinta categoría, gana la severidad **MAX** (Alta > Media > Baja). |
-| **3A — Pendiente** | Polígono de `pendiente_grados.geojson` con **mayor longitud de intersección** con la arista (no por mid-point). Función de Tobler `W = 6 · exp(−3.5 · |S+0.05|) km/h` reemplaza `costSeconds.foot-walking`; el plano original se preserva en `costSecondsFlat` para idempotencia y comparación BASE vs CATAS. |
-| **4A — Vulnerabilidad obras lineales** | `line.distance(geom)` ≤ 15 m sobre el trazado completo, no haversine al mid-point. La obra más cercana define `obraLinealVul` (Alta/Media/Baja). |
-| **4B — Predios en riesgo cercanos** | Buffer geométrico real `line.buffer(25)` con `intersects()` contra el polígono completo del predio. Cuenta agrupado por `(emergencia, categoría)` en `nearbyRisk`. |
-
-`uv run` con metadata PEP 723 inline en el script instala
-`shapely + pyproj` en un venv efímero la primera vez (~1 s) y cachea.
-No requiere venv manual ni `pip install`.
-
-### Por qué dos etapas y no PostGIS server-side
-
-A corto plazo: el grafo se distribuye empaquetado en el APK porque el
-ruteo corre offline (objetivo de diseño). PostGIS quedaría inútil sin
-internet. La Etapa 2 podría reemplazarse por queries `ST_Intersects`
-+ `ST_Buffer` server-side si se migra el grafo a la base de datos —
-está en el roadmap como P1 (pgrouting + endpoint dinámico).
-
-### Cuándo re-correr
-
-- Cambia la red vial de OSM (barrios nuevos, vías agregadas).
-- Cambian las capas oficiales de amenaza, catastro o el EDAVR.
-- Se ajustan parámetros: `OBRA_LINEAL_BUFFER_M`, `PREDIO_RISK_BUFFER_M`,
-  `RANGO_A_GRADOS`, factores de Tobler.
-
-### Validación cuantitativa
-
-`scripts/validate-routes-catastro.js` ejecuta 50 rutas × 3 emergencias
-en dos configuraciones (BASE = grafo plano sin penalty; CATAS = Tobler
-+ 4A + 4B activos) y reporta cuántas cruzan elementos en categoría Alta
-o vías con vulnerabilidad Alta. Resultado tras P0 (2026-04-30):
-
-| Emergencia | Δ duración | % rutas cruzan ElemAlta | % rutas cruzan ObraVulAlta |
-|---|---|---|---|
-| Avenida torrencial | +8.1 min | 19.1 → 8.5 % (−10.6 pp) | 19.1 → 8.5 % (−10.6 pp) |
-| Inundación | +7.0 min | 0 → 0 % | 18.4 → 12.2 % (−6.2 pp) |
-| Movimiento en masa | +7.2 min | 0 → 0 % | 12.2 → 8.2 % (−4.0 pp) |
-
-Performance del benchmark (`scripts/benchmark-routing.js`, 100 rutas):
-Dijkstra mediana **1.1 ms** / p99 **13 ms** sobre 13 363 aristas.
-
-### Referencias normativas y científicas
-
-- **Resolución IGAC 471/2020** — adopta MAGNA-SIRGAS / CTM12 como
-  sistema oficial colombiano.
-- **Decreto 1807/2014** — estudios detallados de riesgo como
-  determinante de ordenamiento territorial.
-- **Tobler, W. (1993)** — *Three presentations on geographical
-  analysis and modeling*. NCGIA Technical Report 93-1.
-- **ALDESARROLLO (2025)** — EDAVR río San Eugenio, Santa Rosa de
-  Cabal. Fuente de los polígonos de pendiente, obras lineales y
-  riesgo predial. Escala 1:1 000.
-
----
-
-## 4. Flujo crítico: cálculo de ruta de evacuación
+## 3. Flujo crítico: cálculo de ruta de evacuación
 
 ```
 1. HomeScreen → "Evacua" (botón rojo)
@@ -481,7 +357,7 @@ Tiempos típicos de cálculo en dispositivo: 20–80 ms para rutas de 1–3 km.
 
 ---
 
-## 5. Flujo: grupo familiar con ubicación compartida
+## 4. Flujo: grupo familiar con ubicación compartida
 
 ```
 1. Home → botón "Familia" (emergencia tools)
